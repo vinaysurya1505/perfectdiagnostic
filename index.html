@@ -1437,6 +1437,7 @@
                                 <td class="px-6 py-4 text-right font-semibold ${pending>0?'text-orange-600':'text-green-700'}">₹${pending.toFixed(2)}</td>
                                 <td class="px-6 py-4">${d.locked ? '<span class="px-2 py-1 rounded text-xs font-semibold bg-green-100 text-green-700">paid</span>' : '<span class="px-2 py-1 rounded text-xs font-semibold bg-red-100 text-red-700">unpaid</span>'}</td>
                                 <td class="px-6 py-4 space-x-3">
+                                    <button data-id="${d.id}" class="cm-history text-indigo-600 font-semibold hover:underline">History</button>
                                     ${d.locked ? '<span class="text-gray-400 text-sm">Locked</span>' : `<button data-id="${d.id}" data-earned="${d.earned}" class="cm-markpaid text-blue-600 font-semibold hover:underline">Mark Paid</button>`}
                                 </td>`;
                             tbody.appendChild(tr);
@@ -1463,7 +1464,10 @@
                                     await db.runTransaction(async t => {
                                         const snap = await t.get(docRef);
                                         const curr = snap.exists ? (snap.data().totalPaid || 0) : 0;
-                                        t.set(docRef, { doctorId, year: y, month: m, totalPaid: curr + amt }, { merge: true });
+                                        const payments = snap.exists ? (snap.data().payments || []) : [];
+                                        const user = auth.currentUser ? auth.currentUser.email : 'unknown';
+                                        payments.push({ amount: amt, date: new Date().toISOString(), by: user });
+                                        t.set(docRef, { doctorId, year: y, month: m, totalPaid: curr + amt, payments }, { merge: true });
                                     });
                                     await loadAndRender();
                                 }}
