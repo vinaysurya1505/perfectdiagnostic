@@ -1199,7 +1199,7 @@
                                 <th class="px-6 py-3">Net Profit</th>
                             </tr></thead><tbody class="bg-white divide-y divide-gray-200">`;
 
-                            let totalPatientsCount = 0, totalRevenue = 0, totalExpenditure = 0, totalCommission = 0;
+                            let totalPatientsCount = 0, totalRevenue = 0, totalExpenditure = 0, totalCommission = 0, totalCash = 0, totalUpi = 0;
                             sortedDates.forEach(dateStr => {
                                 const data = dailyData[dateStr];
                                 const netProfit = data.revenue - data.expenditure - data.commission;
@@ -1207,6 +1207,8 @@
                                 totalRevenue += data.revenue;
                                 totalExpenditure += data.expenditure;
                                 totalCommission += data.commission;
+                                totalCash += data.cash;
+                                totalUpi += data.upi;
                                 tableHTML += `<tr>
                                     <td class="px-6 py-4">${dateStr}</td>
                                     <td class="px-6 py-4">${data.patients.size}</td>
@@ -1225,9 +1227,9 @@
                                 <td class="px-6 py-4">₹${totalRevenue.toFixed(2)}</td>
                                 <td class="px-6 py-4">₹${totalExpenditure.toFixed(2)}</td>
                                 <td class="px-6 py-4">₹${totalCommission.toFixed(2)}</td>
-                                <td class="px-6 py-4">₹${(totalRevenue - totalExpenditure - totalCommission).toFixed(2)}</td>
-                                <td class="px-6 py-4">₹${(totalRevenue - totalExpenditure - totalCommission).toFixed(2)}</td>
-                                <td class="px-6 py-4">₹${(totalRevenue - totalExpenditure - totalCommission).toFixed(2)}</td>
+                                <td class="px-6 py-4">₹${totalCash.toFixed(2)}</td>
+                                <td class="px-6 py-4">₹${totalUpi.toFixed(2)}</td>
+                                <td class="px-6 py-4">₹${totalNetProfit.toFixed(2)}</td>
                             </tr>`;
 
                             tableHTML += `</tbody></table>`;
@@ -1281,9 +1283,9 @@
                                         <td style=\"padding:8px; text-align:right; border:1px solid #e5e7eb;\">₹${totalRevenue.toFixed(2)}</td>
                                         <td style=\"padding:8px; text-align:right; border:1px solid #e5e7eb;\">₹${totalExpenditure.toFixed(2)}</td>
                                         <td style=\"padding:8px; text-align:right; border:1px solid #e5e7eb;\">₹${totalCommission.toFixed(2)}</td>
-                                        <td style=\"padding:8px; text-align:right; border:1px solid #e5e7eb;\">₹${(totalRevenue - totalExpenditure - totalCommission).toFixed(2)}</td>
-                                        <td style=\"padding:8px; text-align:right; border:1px solid #e5e7eb;\">₹${(totalRevenue - totalExpenditure - totalCommission).toFixed(2)}</td>
-                                        <td style=\"padding:8px; text-align:right; border:1px solid #e5e7eb;\">₹${(totalRevenue - totalExpenditure - totalCommission).toFixed(2)}</td>
+                                        <td style=\"padding:8px; text-align:right; border:1px solid #e5e7eb;\">₹${totalCash.toFixed(2)}</td>
+                                        <td style=\"padding:8px; text-align:right; border:1px solid #e5e7eb;\">₹${totalUpi.toFixed(2)}</td>
+                                        <td style=\"padding:8px; text-align:right; border:1px solid #e5e7eb;\">₹${totalNetProfit.toFixed(2)}</td>
                                     </tr>`;
 
                             reportOutput.innerHTML = reportTitle + `<div class="overflow-x-auto">${pdfRoot}</div>`;
