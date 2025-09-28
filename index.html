@@ -1329,6 +1329,7 @@
                                         <tr>
                                             <th class="px-6 py-3 text-left">Doctor</th>
                                             <th class="px-6 py-3 text-left">Location</th>
+                                            <th class="px-6 py-3 text-right">Patient</th>
                                             <th class="px-6 py-3 text-right">Commission Earned</th>
                                             <th class="px-6 py-3 text-right">Commission Paid</th>
                                             <th class="px-6 py-3 text-right">Pending</th>
@@ -1363,7 +1364,7 @@
                         const doctorMap = new Map();
                         doctorsSnap.forEach(doc => {
                             const d = doc.data();
-                            doctorMap.set(doc.id, { id: doc.id, name: d.name || 'N/A', location: d.location || '—', percent: Number(d.commissionPercent || 0), earned: 0, paid: 0 });
+                            doctorMap.set(doc.id, { id: doc.id, name: d.name || 'N/A', location: d.location || '—', percent: Number(d.commissionPercent || 0), earned: 0, paid: 0, patientCount: 0 });
                         });
 
                         // Commission earned from bills in month
@@ -1394,6 +1395,19 @@
                             }
                         });
 
+                        // Count patients referred by each doctor
+                        const patientSetMap = new Map();
+                        billsSnap.forEach(doc => {
+                            const b = doc.data();
+                            if (b.status === 'refunded') return;
+                            if (!b.referredById || !b.patientId) return;
+                            if (!patientSetMap.has(b.referredById)) patientSetMap.set(b.referredById, new Set());
+                            patientSetMap.get(b.referredById).add(b.patientId);
+                        });
+                        patientSetMap.forEach((set, docId) => {
+                            if (doctorMap.has(docId)) doctorMap.get(docId).patientCount = set.size;
+                        });
+
                         const tbody = document.getElementById('cm-body');
                         tbody.innerHTML = '';
                         doctorMap.forEach(d => {
@@ -1402,6 +1416,7 @@
                             tr.innerHTML = `
                                 <td class="px-6 py-4">${d.name}</td>
                                 <td class="px-6 py-4">${d.location}</td>
+                                <td class="px-6 py-4 text-right">${d.patientCount}</td>
                                 <td class="px-6 py-4 text-right">₹${d.earned.toFixed(2)}</td>
                                 <td class="px-6 py-4 text-right">₹${d.paid.toFixed(2)}</td>
                                 <td class="px-6 py-4 text-right font-semibold ${pending>0?'text-orange-600':'text-green-700'}">₹${pending.toFixed(2)}</td>
