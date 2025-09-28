@@ -1,0 +1,1598 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Clinic Admin Panel</title>
+
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.6.1/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.6.1/firebase-auth-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.6.1/firebase-firestore-compat.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+
+    <style>
+        body { font-family: 'Inter', sans-serif; }
+        .sidebar-link { transition: all 0.2s ease-in-out; }
+        .sidebar-link:hover, .sidebar-link.active { background-color: #3b82f6; color: white; }
+        .modal-bg { background-color: rgba(0,0,0,0.5); z-index: 50; transition: opacity 0.3s ease-in-out; }
+        .modal-content { max-height: 90vh; transition: transform 0.3s ease-in-out; }
+        .spinner { border-top-color: #3498db; animation: spin 1s linear infinite; }
+        @keyframes spin { to { transform: rotate(360deg); } }
+        @media print {
+            body * { visibility: hidden; }
+            #pdf-preview, #pdf-preview * { visibility: visible; }
+            #pdf-preview { position: absolute; left: 0; top: 0; width: 100%; }
+        }
+        /* For custom scrollbars */
+        ::-webkit-scrollbar { width: 8px; }
+        ::-webkit-scrollbar-track { background: #f1f1f1; }
+        ::-webkit-scrollbar-thumb { background: #888; border-radius: 4px; }
+        ::-webkit-scrollbar-thumb:hover { background: #555; }
+    </style>
+</head>
+<body class="bg-gray-100">
+
+    <div id="app-container"></div>
+
+    <!-- Hidden element for rendering PDF content -->
+    <div id="pdf-preview" class="hidden fixed -left-[2000px] top-0 w-[800px] bg-white text-black p-8 font-sans"></div>
+
+    <!-- Bill Creation Success Modal -->
+    <div id="bill-success-modal" class="fixed inset-0 modal-bg hidden flex items-center justify-center p-4">
+        <div class="bg-white p-8 rounded-xl shadow-2xl w-full max-w-md text-center modal-content transform scale-95">
+            <div class="flex justify-center items-center mx-auto h-16 w-16 rounded-full bg-green-100 mb-4">
+                <svg class="h-10 w-10 text-green-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" />
+                </svg>
+            </div>
+            <h3 class="text-2xl font-bold text-gray-800 mb-2">Bill Created Successfully!</h3>
+            <p id="bill-success-message" class="mb-6 text-gray-600"></p>
+            <div class="flex flex-col sm:flex-row justify-center gap-3">
+                 <button id="bill-success-download-btn" class="w-full px-4 py-2 bg-blue-600 text-white font-semibold rounded-lg hover:bg-blue-700 transition-colors">Download PDF</button>
+                 <button id="bill-success-print-btn" class="w-full px-4 py-2 bg-gray-600 text-white font-semibold rounded-lg hover:bg-gray-700 transition-colors">Print</button>
+                 <button id="bill-success-close-btn" class="w-full px-4 py-2 bg-gray-200 text-gray-800 font-semibold rounded-lg hover:bg-gray-300 transition-colors">Close</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Generic Modal for Alerts and Confirmations -->
+    <div id="generic-modal" class="fixed inset-0 modal-bg hidden flex items-center justify-center p-4">
+        <div class="bg-white p-6 rounded-xl shadow-2xl w-full max-w-sm modal-content transform scale-95">
+            <h3 id="generic-modal-title" class="text-xl font-bold text-gray-800 mb-4"></h3>
+            <p id="generic-modal-message" class="mb-6 text-gray-600"></p>
+            <div id="generic-modal-buttons" class="flex justify-end gap-3">
+                <!-- Buttons are dynamically injected here -->
+            </div>
+        </div>
+    </div>
+
+
+    <script>
+    // ========================================================================
+    // --- 1. FIREBASE & APP INITIALIZATION ---
+    // ========================================================================
+    document.addEventListener('DOMContentLoaded', () => {
+        fetch('/api/config')
+            .then(response => response.json())
+            .then(firebaseConfig => {
+                firebase.initializeApp(firebaseConfig);
+                const auth = firebase.auth();
+                const db = firebase.firestore();
+                const { Timestamp, FieldValue } = firebase.firestore;
+
+                const appContainer = document.getElementById('app-container');
+                const state = {
+                    user: null,
+                    currentPage: 'home',
+                    listeners: [],
+                };
+
+                // ========================================================================
+                // --- 2. MODAL & NOTIFICATION UTILITIES ---
+                // ========================================================================
+                const genericModal = document.getElementById('generic-modal');
+                const genericModalTitle = document.getElementById('generic-modal-title');
+                const genericModalMessage = document.getElementById('generic-modal-message');
+                const genericModalButtons = document.getElementById('generic-modal-buttons');
+
+                function showModal(title, message, buttons = [{ text: 'OK', class: 'bg-blue-600', action: hideModal }]) {
+                    genericModalTitle.textContent = title;
+                    genericModalMessage.textContent = message;
+                    genericModalButtons.innerHTML = '';
+                    buttons.forEach(btnInfo => {
+                        const button = document.createElement('button');
+                        button.textContent = btnInfo.text;
+                        button.className = `px-4 py-2 text-white font-semibold rounded-lg transition-colors ${btnInfo.class}`;
+                        button.onclick = () => {
+                            if (btnInfo.action) btnInfo.action();
+                            hideModal();
+                        };
+                        genericModalButtons.appendChild(button);
+                    });
+                    genericModal.classList.remove('hidden');
+                    setTimeout(() => genericModal.querySelector('.modal-content').classList.remove('scale-95'), 10);
+                }
+
+                function hideModal() {
+                    const modal = document.querySelector('.modal-bg:not(.hidden)');
+                    if (modal) {
+                        modal.querySelector('.modal-content').classList.add('scale-95');
+                        setTimeout(() => modal.classList.add('hidden'), 300);
+                    }
+                }
+                
+                function showConfirmationModal(title, message, onConfirm) {
+                    showModal(title, message, [
+                        { text: 'Cancel', class: 'bg-gray-500 hover:bg-gray-600', action: hideModal },
+                        { text: 'Confirm', class: 'bg-red-600 hover:bg-red-700', action: onConfirm }
+                    ]);
+                }
+
+                // --- Bill Success Modal Logic ---
+                const billSuccessModal = document.getElementById('bill-success-modal');
+                function showBillSuccessModal(billId, billNumber) {
+                    document.getElementById('bill-success-message').textContent = `Bill #${billNumber} is now ready.`;
+                    
+                    document.getElementById('bill-success-download-btn').onclick = () => generateAndDownloadPDF(billId, 'download');
+                    document.getElementById('bill-success-print-btn').onclick = () => generateAndDownloadPDF(billId, 'print');
+                    document.getElementById('bill-success-close-btn').onclick = hideModal;
+
+                    billSuccessModal.classList.remove('hidden');
+                    setTimeout(() => billSuccessModal.querySelector('.modal-content').classList.remove('scale-95'), 10);
+                }
+
+                // ========================================================================
+                // --- 3. AUTHENTICATION LOGIC ---
+                // ========================================================================
+                auth.onAuthStateChanged(user => {
+                    state.listeners.forEach(unsubscribe => unsubscribe());
+                    state.listeners = [];
+                    
+                    if (user) {
+                        state.user = user;
+                        if(state.currentPage === 'login' || state.currentPage === 'home') {
+                            state.currentPage = 'dashboard';
+                        }
+                    } else {
+                        state.user = null;
+                        state.currentPage = 'home';
+                    }
+                    renderApp();
+                });
+
+                function handleLogin(email, password) {
+                    const errorEl = document.getElementById('login-error');
+                    const button = document.querySelector('#login-form button[type="submit"]');
+                    errorEl.textContent = '';
+                    button.disabled = true;
+                    button.innerHTML = '<span class="spinner h-5 w-5 mx-auto border-2"></span>';
+                    
+                    auth.signInWithEmailAndPassword(email, password)
+                        .catch(error => {
+                            errorEl.textContent = error.message || "Failed to login. Please check your credentials.";
+                        })
+                        .finally(() => {
+                            button.disabled = false;
+                            button.innerHTML = 'Sign In';
+                        });
+                }
+
+                function handleLogout() {
+                    auth.signOut();
+                }
+                
+                // ========================================================================
+                // --- 4. UI RENDERING & ROUTING ---
+                // ========================================================================
+                function renderApp() {
+                    if (!state.user && state.currentPage !== 'home' && state.currentPage !== 'login') {
+                        state.currentPage = 'home';
+                    }
+                    switch (state.currentPage) {
+                        case 'home': renderHomePage(); break;
+                        case 'login': renderLoginPage(); break;
+                        case 'dashboard': renderAdminLayout('Dashboard', renderDashboard); break;
+                        case 'billing': renderAdminLayout('Billing', initializeBillingPage); break;
+                        case 'tests': renderAdminLayout('Manage Tests', initializeTestsPage); break;
+                        case 'doctors': renderAdminLayout('Manage Doctors', initializeDoctorsPage); break;
+                        case 'expenditures': renderAdminLayout('Expenditures', initializeExpendituresPage); break;
+                        case 'reports': renderAdminLayout('Financial Reports', renderReportsPage); break;
+                        case 'commissions': renderAdminLayout('Commission Management', renderCommissionManagementPage); break;
+                        case 'patient-management': renderAdminLayout('Patient Management', renderPatientManagementPage); break;
+                        default: renderHomePage();
+                    }
+                }
+                
+                function navigate(page) {
+                    state.currentPage = page;
+                    renderApp();
+                }
+
+                // ========================================================================
+                // --- 5. HTML TEMPLATES & COMPONENTS ---
+                // ========================================================================
+                
+                function renderHomePage() {
+                    appContainer.innerHTML = `
+                        <div class="min-h-screen bg-white">
+                            <header class="absolute top-0 left-0 right-0 z-10 bg-gradient-to-r from-blue-700 via-blue-500 to-blue-400 shadow-md">
+                                <nav class="container mx-auto px-6 py-4 flex justify-between items-center">
+                                    <h1 class="text-xl md:text-2xl font-bold text-white drop-shadow">Perfect Diagnostic Centre</h1>
+                                    <button id="go-to-login-nav" class="px-5 py-2 bg-white text-blue-700 font-semibold rounded-lg shadow-md hover:bg-blue-100 transition duration-300">
+                                        Admin Login
+                                    </button>
+                                </nav>
+                            </header>
+                            <main>
+                                <section 
+                                    class="relative h-screen flex items-center justify-center bg-cover bg-center" 
+                                    style="background-image: url('https://images.unsplash.com/photo-1576091160550-2173dba999ef?q=80&w=2070&auto=format&fit=crop');">
+                                    <div class="absolute inset-0 bg-black bg-opacity-50"></div>
+                                    <div class="relative container mx-auto px-6 text-center text-white">
+                                        <h2 class="text-4xl md:text-6xl font-extrabold leading-tight tracking-tight">Your Partner in Accurate Diagnostics</h2>
+                                        <p class="mt-4 text-lg md:text-xl max-w-2xl mx-auto text-gray-200">State-of-the-art technology ensuring patient care and satisfaction.</p>
+                                    </div>
+                                </section>
+                                <!-- Feature Cards Section -->
+                                <section class="py-16 bg-white">
+                                    <div class="container mx-auto px-6">
+                                        <h3 class="text-3xl font-bold text-center text-blue-700 mb-10">Why Choose Us?</h3>
+                                        <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-8 justify-center">
+                                            <div class="bg-blue-50 rounded-xl shadow-lg p-6 flex flex-col items-center">
+                                                <div class="bg-blue-100 text-blue-700 rounded-full p-3 mb-4">
+                                                    <svg class="h-8 w-8" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4" /></svg>
+                                                </div>
+                                                <h4 class="font-semibold text-lg mb-2">Accurate Results</h4>
+                                                <p class="text-gray-600 text-center">Precision diagnostics for reliable health decisions.</p>
+                                            </div>
+                                            <div class="bg-blue-50 rounded-xl shadow-lg p-6 flex flex-col items-center">
+                                                <div class="bg-blue-100 text-blue-700 rounded-full p-3 mb-4">
+                                                    <svg class="h-8 w-8" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01" /></svg>
+                                                </div>
+                                                <h4 class="font-semibold text-lg mb-2">Modern Machines</h4>
+                                                <p class="text-gray-600 text-center">Latest technology for advanced testing and imaging.</p>
+                                            </div>
+                                            <div class="bg-blue-50 rounded-xl shadow-lg p-6 flex flex-col items-center">
+                                                <div class="bg-blue-100 text-blue-700 rounded-full p-3 mb-4">
+                                                    <svg class="h-8 w-8" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" /></svg>
+                                                </div>
+                                                <h4 class="font-semibold text-lg mb-2">Trusted Experts</h4>
+                                                <p class="text-gray-600 text-center">Experienced professionals for quality care.</p>
+                                            </div>
+                                            <div class="bg-blue-50 rounded-xl shadow-lg p-6 flex flex-col items-center">
+                                                <div class="bg-blue-100 text-blue-700 rounded-full p-3 mb-4">
+                                                    <svg class="h-8 w-8" fill="none" stroke="currentColor" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10" /><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3" /></svg>
+                                                </div>
+                                                <h4 class="font-semibold text-lg mb-2">Quick Turnaround</h4>
+                                                <p class="text-gray-600 text-center">Fast reporting for timely treatment decisions.</p>
+                                            </div>
+                                            <div class="bg-blue-50 rounded-xl shadow-lg p-6 flex flex-col items-center">
+                                                <div class="bg-blue-100 text-blue-700 rounded-full p-3 mb-4">
+                                                    <svg class="h-8 w-8" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 11c0-1.104.896-2 2-2s2 .896 2 2-.896 2-2 2-2-.896-2-2z" /></svg>
+                                                </div>
+                                                <h4 class="font-semibold text-lg mb-2">Affordable Pricing</h4>
+                                                <p class="text-gray-600 text-center">Competitive rates for all diagnostic services.</p>
+                                            </div>
+                                            <div class="bg-blue-50 rounded-xl shadow-lg p-6 flex flex-col items-center">
+                                                <div class="bg-blue-100 text-blue-700 rounded-full p-3 mb-4">
+                                                    <svg class="h-8 w-8" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 9V7a5 5 0 00-10 0v2a2 2 0 00-2 2v5a2 2 0 002 2h10a2 2 0 002-2v-5a2 2 0 00-2-2z" /></svg>
+                                                </div>
+                                                <h4 class="font-semibold text-lg mb-2">Patient-Centric Care</h4>
+                                                <p class="text-gray-600 text-center">Compassionate service for every patient.</p>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </section>
+                                <section class="py-20 bg-gray-50">
+                                    <div class="container mx-auto px-6 text-center">
+                                        <h3 class="text-3xl font-bold text-gray-800 mb-12">Get In Touch</h3>
+                                        <div class="flex flex-wrap justify-center gap-12">
+                                            <div class="text-center max-w-sm">
+                                                <div class="flex items-center justify-center h-16 w-16 rounded-full bg-blue-100 text-blue-600 mx-auto mb-4">
+                                                    <svg class="h-8 w-8" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z" /><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 11a3 3 0 11-6 0 3 3 0 016 0z" /></svg>
+                                                </div>
+                                                <h4 class="text-xl leading-6 font-medium text-gray-900">Our Location</h4>
+                                                <p class="mt-2 text-base text-gray-600">Near Government Hospital, Front of Old Gate, Partawal Bazar, Maharajganj, Uttar Pradesh</p>
+                                            </div>
+                                            <div class="text-center max-w-sm">
+                                                <div class="flex items-center justify-center h-16 w-16 rounded-full bg-blue-100 text-blue-600 mx-auto mb-4">
+                                                    <svg class="h-8 w-8" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 5a2 2 0 012-2h3.28a1 1 0 01.948.684l1.498 4.493a1 1 0 01-.502 1.21l-2.257 1.13a11.042 11.042 0 005.516 5.516l1.13-2.257a1 1 0 011.21-.502l4.493 1.498a1 1 0 01.684.949V19a2 2 0 01-2 2h-1C9.716 21 3 14.284 3 6V5z" /></svg>
+                                                </div>
+                                                <h4 class="text-xl leading-6 font-medium text-gray-900">Phone & Email</h4>
+                                                <p class="mt-2 text-base text-gray-600">+91 9838104111<br>+91 9616434212<br>perfectdiagnostic@gmail.com</p>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </section>
+                            </main>
+                            <footer class="bg-gray-800 text-white">
+                                <div class="container mx-auto px-6 py-8 text-center">
+                                    <p>&copy; ${new Date().getFullYear()} Perfect Diagnostic and Ultrasound Centre. All Rights Reserved.</p>
+                                </div>
+                            </footer>
+                        </div>
+                    `;
+                    document.getElementById('go-to-login-nav').onclick = () => navigate('login');
+                }
+
+                function renderLoginPage() {
+                    appContainer.innerHTML = `
+                        <div class="min-h-screen bg-gray-100 flex items-center justify-center">
+                            <div class="w-full max-w-md bg-white p-8 rounded-xl shadow-2xl">
+                                <h2 class="text-3xl font-bold text-center text-gray-800 mb-6">Admin Login</h2>
+                                <form id="login-form">
+                                    <div class="mb-4">
+                                        <label for="email" class="block text-sm font-medium text-gray-700">Email</label>
+                                        <input type="email" id="email" class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500" required>
+                                    </div>
+                                    <div class="mb-6">
+                                        <label for="password" class="block text-sm font-medium text-gray-700">Password</label>
+                                        <input type="password" id="password" class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500" required>
+                                    </div>
+                                    <p id="login-error" class="text-red-500 text-sm mb-4 h-5"></p>
+                                    <button type="submit" class="w-full py-2.5 px-4 bg-blue-600 text-white font-semibold rounded-md hover:bg-blue-700 transition-colors flex justify-center items-center">Sign In</button>
+                                    <button id="back-to-home" type="button" class="mt-4 w-full text-center text-sm text-gray-600 hover:text-blue-600">Back to Home</button>
+                                </form>
+                            </div>
+                        </div>
+                    `;
+                    document.getElementById('login-form').onsubmit = (e) => {
+                        e.preventDefault();
+                        handleLogin(e.target.email.value, e.target.password.value);
+                    };
+                    document.getElementById('back-to-home').onclick = () => navigate('home');
+                }
+
+                function renderAdminLayout(title, contentRenderer) {
+                    appContainer.innerHTML = `
+                        <div class="flex h-screen bg-gray-100">
+                            <aside class="w-64 bg-gray-800 text-white flex flex-col hidden md:flex">
+                                <div class="h-16 flex items-center justify-center text-2xl font-bold">ClinicPro</div>
+                                <nav class="flex-1 px-2 py-4 space-y-2">
+                                    ${SidebarItem('dashboard', 'Dashboard')}
+                                    ${SidebarItem('billing', 'Billing')}
+                                    ${SidebarItem('tests', 'Tests')}
+                                    ${SidebarItem('doctors', 'Doctors')}
+                                    ${SidebarItem('expenditures', 'Expenditure')}
+                                    ${SidebarItem('reports', 'Financial Report')}
+                                    ${SidebarItem('commissions', 'Commission Management')}
+                                    ${SidebarItem('patient-management', 'Patient Management')}
+                                </nav>
+                                <div class="p-4">
+                                    <button id="logout-btn" class="w-full py-2 px-4 text-left rounded-md sidebar-link bg-red-600 hover:bg-red-700 text-white font-semibold">Sign Out</button>
+                                </div>
+                            </aside>
+                            <main class="flex-1 flex flex-col overflow-hidden">
+                                <header class="h-16 bg-white border-b border-gray-200 flex items-center justify-between px-6">
+                                    <h1 class="text-2xl font-semibold text-gray-800">${title}</h1>
+                                </header>
+                                <div id="page-content" class="flex-1 overflow-x-hidden overflow-y-auto p-4 sm:p-6 bg-gray-50"></div>
+                            </main>
+                        </div>
+                    `;
+                    
+                    document.querySelectorAll('.nav-link').forEach(link => {
+                        link.onclick = (e) => {
+                            e.preventDefault();
+                            navigate(e.currentTarget.dataset.page);
+                        };
+                    });
+                    document.getElementById('logout-btn').onclick = handleLogout;
+                    
+                    contentRenderer();
+                }
+                
+                function SidebarItem(page, text) {
+                    const isActive = state.currentPage === page ? 'active' : '';
+                    return `<a href="#" data-page="${page}" class="nav-link block py-2.5 px-4 rounded-md sidebar-link ${isActive}">${text}</a>`;
+                }
+
+                // ========================================================================
+                // --- 6. GENERIC CRUD PAGE LOGIC ---
+                // ========================================================================
+
+                function createCrudPage(collectionName, title, formFields, tableHeaders, renderRow) {
+                    const content = document.getElementById('page-content');
+                    let editingId = null;
+
+                    const formInputs = formFields.map(f => `
+                        <div class="mb-4">
+                            <label for="${f.id}" class="block text-sm font-medium text-gray-700">${f.label}</label>
+                            <input type="${f.type}" id="${f.id}" class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500" required>
+                        </div>
+                    `).join('');
+
+                    const tableHeaderRow = tableHeaders.map(h => `<th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">${h}</th>`).join('');
+
+                    content.innerHTML = `
+                        <div class="space-y-6">
+                            <div class="bg-white p-6 rounded-xl shadow-lg">
+                                <h3 id="form-title" class="text-xl font-bold leading-6 text-gray-900 mb-4">Add New ${title}</h3>
+                                <form id="crud-form">
+                                    ${formInputs}
+                                    <div class="flex items-center gap-4 mt-6">
+                                        <button type="submit" id="submit-btn" class="px-4 py-2 bg-blue-600 text-white font-semibold rounded-md hover:bg-blue-700">Save ${title}</button>
+                                        <button type="button" id="cancel-btn" class="px-4 py-2 text-gray-600 hover:text-gray-900 font-semibold hidden">Cancel</button>
+                                    </div>
+                                </form>
+                            </div>
+                            <div class="bg-white rounded-xl shadow-lg overflow-hidden">
+                                <div class="overflow-x-auto">
+                                    <table class="min-w-full divide-y divide-gray-200">
+                                        <thead class="bg-gray-50">
+                                            <tr>${tableHeaderRow}</tr>
+                                        </thead>
+                                        <tbody id="crud-table-body" class="bg-white divide-y divide-gray-200"></tbody>
+                                    </table>
+                                </div>
+                            </div>
+                        </div>
+                    `;
+                    
+                    const form = document.getElementById('crud-form');
+                    const tableBody = document.getElementById('crud-table-body');
+                    const formTitle = document.getElementById('form-title');
+                    const submitBtn = document.getElementById('submit-btn');
+                    const cancelBtn = document.getElementById('cancel-btn');
+
+                    function resetForm() {
+                        form.reset();
+                        editingId = null;
+                        formTitle.textContent = `Add New ${title}`;
+                        submitBtn.textContent = `Save ${title}`;
+                        cancelBtn.classList.add('hidden');
+                    }
+
+                    cancelBtn.onclick = resetForm;
+                    
+                    form.onsubmit = async (e) => {
+                        e.preventDefault();
+                        const data = {};
+                        formFields.forEach(f => {
+                            const input = document.getElementById(f.id);
+                            data[f.key] = f.type === 'number' ? parseFloat(input.value) : input.value;
+                        });
+
+                        try {
+                            if (editingId) {
+                                await db.collection(collectionName).doc(editingId).update(data);
+                            } else {
+                                if (collectionName === 'doctors') data.commissionBalance = 0;
+                                if (collectionName === 'expenditures') data.date = Timestamp.now();
+                                await db.collection(collectionName).add(data);
+                            }
+                            resetForm();
+                        } catch (error) {
+                            console.error("Error saving document: ", error);
+                            showModal('Error', "Failed to save data. Please check the console for details.");
+                        }
+                    };
+
+                    const query = db.collection(collectionName);
+                    
+                    const unsubscribe = query.onSnapshot(snapshot => {
+                        tableBody.innerHTML = `<tr><td colspan="${tableHeaders.length}" class="text-center py-10"><div class="spinner h-8 w-8 mx-auto border-4"></div></td></tr>`;
+                        
+                        let docs = snapshot.docs;
+                        // Client-side sorting
+                        if (collectionName === 'expenditures') {
+                            docs.sort((a, b) => (b.data().date?.toMillis() || 0) - (a.data().date?.toMillis() || 0));
+                        } else if (formFields.length > 0) {
+                            const sortKey = formFields[0].key;
+                            docs.sort((a, b) => (a.data()[sortKey] || '').toString().localeCompare((b.data()[sortKey] || '').toString()));
+                        }
+
+                        setTimeout(() => {
+                            if (docs.length === 0) {
+                                tableBody.innerHTML = `<tr><td colspan="${tableHeaders.length}" class="text-center py-10 text-gray-500">No ${title}s found.</td></tr>`;
+                                return;
+                            }
+                            tableBody.innerHTML = '';
+                            docs.forEach(doc => {
+                                const row = tableBody.insertRow();
+                                row.innerHTML = renderRow(doc.id, doc.data());
+                                
+                                row.querySelector('.edit-btn').onclick = () => {
+                                    editingId = doc.id;
+                                    formFields.forEach(f => {
+                                        document.getElementById(f.id).value = doc.data()[f.key] || '';
+                                    });
+                                    formTitle.textContent = `Edit ${title}`;
+                                    submitBtn.textContent = `Update ${title}`;
+                                    cancelBtn.classList.remove('hidden');
+                                    form.scrollIntoView({ behavior: 'smooth' });
+                                };
+
+                                row.querySelector('.delete-btn').onclick = () => {
+                                     showConfirmationModal('Confirm Deletion', `Are you sure you want to delete this ${title}? This action cannot be undone.`, async () => {
+                                        await db.collection(collectionName).doc(doc.id).delete();
+                                    });
+                                };
+                            });
+                        }, 300);
+                    });
+                    state.listeners.push(unsubscribe);
+                }
+
+                // ========================================================================
+                // --- 7. CRUD PAGE IMPLEMENTATIONS ---
+                // ========================================================================
+
+                function initializeTestsPage() {
+                    createCrudPage('tests', 'Test',
+                        [{ id: 'test-name', label: 'Test Name', type: 'text', key: 'name' }, { id: 'test-price', label: 'Price (₹)', type: 'number', key: 'price' }],
+                        ['Name', 'Price', 'Actions'],
+                        (id, data) => `
+                            <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-800">${data.name || 'N/A'}</td>
+                            <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-600">₹${(Number(data.price) || 0).toFixed(2)}</td>
+                            <td class="px-6 py-4 whitespace-nowrap text-sm font-medium space-x-4">
+                                <button class="edit-btn text-indigo-600 hover:text-indigo-900">Edit</button>
+                                <button class="delete-btn text-red-600 hover:text-red-900">Delete</button>
+                            </td>
+                        `
+                    );
+                }
+
+                function initializeDoctorsPage() {
+                     createCrudPage('doctors', 'Doctor',
+                        [{ id: 'doctor-name', label: 'Doctor Name', type: 'text', key: 'name' }, { id: 'doctor-commission', label: 'Commission (%)', type: 'number', key: 'commissionPercent' }],
+                        ['Name', 'Commission %', 'Commission Balance', 'Actions'],
+                        (id, data) => `
+                            <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-800">${data.name || 'N/A'}</td>
+                            <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-600">${data.commissionPercent || 0}%</td>
+                            <td class="px-6 py-4 whitespace-nowrap text-sm font-semibold text-gray-800">₹${(Number(data.commissionBalance) || 0).toFixed(2)}</td>
+                            <td class="px-6 py-4 whitespace-nowrap text-sm font-medium space-x-4">
+                                <button class="edit-btn text-indigo-600 hover:text-indigo-900">Edit</button>
+                                <button class="delete-btn text-red-600 hover:text-red-900">Delete</button>
+                            </td>
+                        `
+                    );
+                }
+
+                function initializeExpendituresPage() {
+                     createCrudPage('expenditures', 'Expenditure',
+                        [{ id: 'exp-description', label: 'Description', type: 'text', key: 'description' }, { id: 'exp-amount', label: 'Amount (₹)', type: 'number', key: 'amount' }],
+                        ['Date', 'Description', 'Amount', 'Actions'],
+                        (id, data) => `
+                            <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-600">${data.date ? data.date.toDate().toLocaleDateString() : 'N/A'}</td>
+                            <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-800">${data.description || 'N/A'}</td>
+                            <td class="px-6 py-4 whitespace-nowrap text-sm font-semibold text-red-600">₹${(Number(data.amount) || 0).toFixed(2)}</td>
+                            <td class="px-6 py-4 whitespace-nowrap text-sm font-medium space-x-4">
+                                <button class="edit-btn text-indigo-600 hover:text-indigo-900">Edit</button>
+                                <button class="delete-btn text-red-600 hover:text-red-900">Delete</button>
+                            </td>
+                        `
+                    );
+                }
+                
+                // ========================================================================
+                // --- 8. BILLING PAGE LOGIC ---
+                // ========================================================================
+                async function initializeBillingPage() {
+                    const content = document.getElementById('page-content');
+                    content.innerHTML = `
+                        <div class="space-y-6">
+                            <div class="flex justify-between items-center">
+                                <h2 class="text-xl font-bold text-gray-800">Recent Bills</h2>
+                                <button id="add-bill-btn" class="px-4 py-2 bg-blue-600 text-white font-semibold rounded-md hover:bg-blue-700 shadow">Create New Bill</button>
+                            </div>
+                            <div class="bg-white shadow-lg rounded-xl overflow-hidden">
+                                <div class="overflow-x-auto">
+                                    <table class="min-w-full divide-y divide-gray-200">
+                                        <thead class="bg-gray-50">
+                                            <tr>
+                                                <th class="px-6 py-3 text-left">Bill #</th><th class="px-6 py-3 text-left">Patient</th><th class="px-6 py-3 text-left">Date</th><th class="px-6 py-3 text-left">Total</th><th class="px-6 py-3 text-left">Status</th><th class="px-6 py-3 text-left">Actions</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody id="bills-list-body" class="bg-white divide-y divide-gray-200"></tbody>
+                                    </table>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <div id="bill-modal" class="fixed inset-0 modal-bg hidden flex items-center justify-center p-4">
+                            <div class="bg-white p-6 rounded-xl shadow-2xl w-full max-w-4xl modal-content transform scale-95 overflow-y-auto">
+                                <h3 id="modal-title" class="text-2xl mb-4 font-bold text-gray-800">Create Bill</h3>
+                                <form id="bill-form"><!-- Form content is injected here --></form>
+                            </div>
+                        </div>
+                    `;
+                    
+                    document.getElementById('bill-form').innerHTML = `
+                        <fieldset class="border p-4 rounded-md mb-4"><legend class="px-2 font-semibold">Patient Details</legend><div class="grid grid-cols-1 md:grid-cols-2 gap-4"><div><label class="block text-sm">Patient Name*</label><input type="text" id="patient-name" class="w-full p-2 border rounded-md" required></div><div><label class="block text-sm">Phone</label><input type="tel" id="patient-phone" class="w-full p-2 border rounded-md"></div><div><label class="block text-sm">Age</label><input type="number" id="patient-age" class="w-full p-2 border rounded-md"></div><div><label class="block text-sm">Gender</label><select id="patient-gender" class="w-full p-2 border rounded-md"><option>Male</option><option>Female</option><option>Other</option></select></div><div class="md:col-span-2"><label class="block text-sm">Referred By</label><select id="referred-by" class="w-full p-2 border rounded-md"><option value="">None</option></select></div></div></fieldset>
+                        <fieldset class="border p-4 rounded-md mb-4"><legend class="px-2 font-semibold">Bill Items</legend><div id="bill-items" class="space-y-3 mb-3"></div><button type="button" id="add-item-btn" class="px-3 py-1 bg-green-500 text-white text-sm rounded-md hover:bg-green-600">Add Test</button></fieldset>
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-4 border-t pt-4"><div class="space-y-2"><div><label class="block text-sm">Discount (%)</label><input type="number" id="discount-percent" value="0" min="0" max="100" class="w-full p-2 border rounded-md"></div><div><label class="block text-sm">GST (%)</label><input type="number" id="gst-percent" value="0" min="0" class="w-full p-2 border rounded-md"></div></div><div class="text-right space-y-1 text-gray-700"><p>Subtotal: <span id="subtotal" class="font-medium text-black">₹0.00</span></p><p>Discount: <span id="discount-amount" class="font-medium text-black">₹0.00</span></p><p class="border-t pt-1 mt-1">Total after Discount: <span id="post-discount-total" class="font-medium text-black">₹0.00</span></p><p>GST: <span id="gst-amount" class="font-medium text-black">₹0.00</span></p><p class="font-bold text-xl border-t pt-1 mt-1">Grand Total: <span id="grand-total" class="text-blue-600">₹0.00</span></p></div></div>
+                        <div class="flex justify-end gap-4 mt-6"><button type="button" id="close-modal-btn" class="px-4 py-2 bg-gray-300 rounded-md hover:bg-gray-400 font-semibold">Cancel</button><button type="submit" class="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 font-semibold">Save Bill</button></div>
+                    `;
+                    
+                    let allTests = [], allDoctors = [];
+                    const billModal = document.getElementById('bill-modal');
+                    const billForm = document.getElementById('bill-form');
+                    const billItemsContainer = document.getElementById('bill-items');
+                    
+                    const openModal = () => {
+                        billModal.classList.remove('hidden');
+                        setTimeout(() => billModal.querySelector('.modal-content').classList.remove('scale-95'), 10);
+                    };
+                    const closeModalBilling = () => {
+                        billModal.querySelector('.modal-content').classList.add('scale-95');
+                        setTimeout(() => {
+                            billModal.classList.add('hidden');
+                            billForm.reset();
+                            billItemsContainer.innerHTML = '';
+                            updateBillTotals();
+                        }, 300);
+                    }
+
+                    function updateBillTotals() {
+                        let subtotal = 0;
+                        billItemsContainer.querySelectorAll('.bill-item').forEach(itemRow => {
+                            subtotal += parseFloat(itemRow.dataset.price || 0) * parseInt(itemRow.querySelector('.item-quantity').value || 1);
+                        });
+                        const discountPercent = parseFloat(document.getElementById('discount-percent').value) || 0;
+                        const gstPercent = parseFloat(document.getElementById('gst-percent').value) || 0;
+                        const discountAmount = subtotal * (discountPercent / 100);
+                        const postDiscountTotal = subtotal - discountAmount;
+                        const gstAmount = postDiscountTotal * (gstPercent / 100);
+                        const grandTotal = postDiscountTotal + gstAmount;
+                        document.getElementById('subtotal').textContent = `₹${subtotal.toFixed(2)}`;
+                        document.getElementById('discount-amount').textContent = `- ₹${discountAmount.toFixed(2)}`;
+                        document.getElementById('post-discount-total').textContent = `₹${postDiscountTotal.toFixed(2)}`;
+                        document.getElementById('gst-amount').textContent = `+ ₹${gstAmount.toFixed(2)}`;
+                        document.getElementById('grand-total').textContent = `₹${grandTotal.toFixed(2)}`;
+                    }
+
+                    function addBillItem() {
+                        const itemDiv = document.createElement('div');
+                        itemDiv.className = 'bill-item flex items-center gap-2';
+                        itemDiv.dataset.price = "0";
+                        const testOptions = allTests.map(t => `<option value="${t.id}" data-price="${t.price}">${t.name} (₹${t.price})</option>`).join('');
+                        itemDiv.innerHTML = `<select class="item-test-select flex-grow p-2 border rounded-md">${testOptions}</select><input type="number" value="1" min="1" class="item-quantity w-16 p-2 border rounded-md"><button type="button" class="remove-item-btn p-2 bg-red-500 text-white rounded-md leading-none">X</button>`;
+                        billItemsContainer.appendChild(itemDiv);
+                        
+                        if (allTests.length > 0) itemDiv.dataset.price = allTests[0].price;
+                        
+                        itemDiv.querySelector('.item-test-select').onchange = (e) => {
+                            itemDiv.dataset.price = e.target.options[e.target.selectedIndex].dataset.price;
+                            updateBillTotals();
+                        };
+                        itemDiv.querySelector('.item-quantity').oninput = updateBillTotals;
+                        itemDiv.querySelector('.remove-item-btn').onclick = () => { itemDiv.remove(); updateBillTotals(); };
+                        updateBillTotals();
+                    }
+
+                    async function loadPrerequisites() {
+                        const [testsSnap, doctorsSnap] = await Promise.all([db.collection('tests').get(), db.collection('doctors').get()]);
+                        allTests = testsSnap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+                        allDoctors = doctorsSnap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+                        const referredBySelect = document.getElementById('referred-by');
+                        referredBySelect.innerHTML = '<option value="">Self</option>' + allDoctors.map(d => `<option value="${d.id}">${d.name}</option>`).join('');
+                    }
+                    
+                    document.getElementById('add-bill-btn').onclick = () => { loadPrerequisites().then(() => { addBillItem(); openModal(); }); };
+                    document.getElementById('close-modal-btn').onclick = closeModalBilling;
+                    document.getElementById('add-item-btn').onclick = addBillItem;
+                    ['discount-percent', 'gst-percent'].forEach(id => { document.getElementById(id).oninput = updateBillTotals; });
+                    
+                    billForm.onsubmit = async (e) => {
+                        e.preventDefault();
+                        const submitBtn = billForm.querySelector('button[type="submit"]');
+                        submitBtn.disabled = true;
+                        submitBtn.textContent = 'Saving...';
+
+                        try {
+                            const patientPhone = document.getElementById('patient-phone').value.trim();
+                            let patientId;
+                            const patientDetails = { name: document.getElementById('patient-name').value, age: parseInt(document.getElementById('patient-age').value) || null, gender: document.getElementById('patient-gender').value, phone: patientPhone || null };
+                            let patientQuery = patientPhone ? await db.collection('patients').where('phone', '==', patientPhone).limit(1).get() : null;
+                            if (patientQuery && !patientQuery.empty) {
+                                patientId = patientQuery.docs[0].id;
+                                await db.collection('patients').doc(patientId).update(patientDetails);
+                            } else {
+                                patientId = (await db.collection('patients').add(patientDetails)).id;
+                            }
+
+                            const items = Array.from(billItemsContainer.querySelectorAll('.bill-item'))
+                                .map(row => {
+                                    const testId = row.querySelector('.item-test-select').value;
+                                    const test = allTests.find(t => t.id === testId);
+                                    if (!test) return null;
+                                    return { testId, name: test.name, price: test.price, quantity: parseInt(row.querySelector('.item-quantity').value) || 1 };
+                                })
+                                .filter(item => item !== null);
+
+                            if (items.length === 0) throw new Error("At least one valid test must be added.");
+
+                            const subtotal = items.reduce((acc, item) => acc + (item.price * item.quantity), 0);
+                            const discountPercent = parseFloat(document.getElementById('discount-percent').value) || 0;
+                            const gstPercent = parseFloat(document.getElementById('gst-percent').value) || 0;
+                            const total = (subtotal * (1 - discountPercent / 100)) * (1 + gstPercent / 100);
+
+                            const counterRef = db.collection('metadata').doc('counters');
+                            const newBillNumber = await db.runTransaction(async t => {
+                                const counterDoc = await t.get(counterRef);
+                                if (!counterDoc.exists) throw "Bill counter not found!";
+                                const newNo = counterDoc.data().billNo;
+                                t.update(counterRef, { billNo: FieldValue.increment(1) });
+                                return `PDB${newNo}`;
+                            });
+                            
+                            const billData = { patientId, patientDetails, billNumber: newBillNumber, referredById: document.getElementById('referred-by').value || null, items, subtotal, discountPercent, gstPercent, total, createdAt: Timestamp.now() };
+                            const billRef = await db.collection('bills').add(billData);
+
+                            await db.collection('transactions').add({ type: 'income', amount: total, description: `Payment for Bill #${newBillNumber}`, relatedBillId: billRef.id, date: Timestamp.now() });
+
+                            const referredById = document.getElementById('referred-by').value;
+                            if (referredById) {
+                                const doctor = allDoctors.find(d => d.id === referredById);
+                                if (doctor && doctor.commissionPercent > 0) {
+                                    const commissionAmount = subtotal * (doctor.commissionPercent / 100);
+                                    await db.collection('doctors').doc(referredById).update({ commissionBalance: FieldValue.increment(commissionAmount) });
+                                    await db.collection('transactions').add({ type: 'commission', amount: commissionAmount, description: `Commission for Bill #${newBillNumber} to Dr. ${doctor.name}`, relatedBillId: billRef.id, relatedDoctorId: referredById, date: Timestamp.now() });
+                                }
+                            }
+                            
+                            closeModalBilling();
+                            showBillSuccessModal(billRef.id, newBillNumber);
+
+                        } catch (error) {
+                            console.error("Error creating bill: ", error);
+                            showModal('Creation Failed', "Failed to create bill: " + error.message);
+                        } finally {
+                            submitBtn.disabled = false;
+                            submitBtn.textContent = 'Save Bill';
+                        }
+                    };
+                    
+                    const billsListBody = document.getElementById('bills-list-body');
+                    
+                    // Event Delegation for action buttons
+                    billsListBody.addEventListener('click', (e) => {
+                        if (e.target.classList.contains('view-pdf-btn')) {
+                            const billId = e.target.dataset.id;
+                            if (billId) {
+                                generateAndDownloadPDF(billId, 'download');
+                            }
+                        }
+                        if (e.target.classList.contains('refund-bill-btn')) {
+                            const billId = e.target.dataset.id;
+                            if (billId) {
+                                handleRefundBill(billId);
+                            }
+                        }
+                    });
+
+                    const unsubscribe = db.collection('bills').orderBy('createdAt', 'desc').limit(20).onSnapshot(snapshot => {
+                        billsListBody.innerHTML = '';
+                        if (snapshot.empty) {
+                            billsListBody.innerHTML = `<tr><td colspan="5" class="text-center py-10 text-gray-500">No bills found. Create one to get started!</td></tr>`; return;
+                        }
+                        snapshot.forEach(doc => {
+                            const bill = doc.data();
+                            const patientName = bill.patientDetails?.name || 'Unknown';
+                            const row = billsListBody.insertRow();
+                            const status = bill.status === 'refunded' ? 'refunded' : 'paid';
+                            row.innerHTML = `
+                                <td class="px-6 py-4 font-medium text-gray-900">${bill.billNumber}</td>
+                                <td class="px-6 py-4 text-gray-700">${patientName}</td>
+                                <td class="px-6 py-4 text-gray-600">${bill.createdAt.toDate().toLocaleDateString()}</td>
+                                <td class="px-6 py-4 font-semibold text-gray-900">₹${bill.total.toFixed(2)}</td>
+                                <td class="px-6 py-4">
+                                    <span class="inline-block px-2 py-1 rounded text-xs font-semibold ${status === 'refunded' ? 'bg-red-100 text-red-700' : 'bg-green-100 text-green-700'}">${status}</span>
+                                </td>
+                                <td class="px-6 py-4 flex gap-3">
+                                    <button data-id="${doc.id}" class="view-pdf-btn text-blue-600 hover:underline font-semibold">View/PDF</button>
+                                    ${status !== 'refunded' ? `<button data-id="${doc.id}" class="refund-bill-btn text-red-600 hover:underline font-semibold">Refund</button>` : ''}
+                                </td>
+                            `;
+                        });
+                    });
+                    state.listeners.push(unsubscribe);
+                }
+
+                async function handleRefundBill(billId) {
+                    showConfirmationModal('Refund Bill', 'Are you sure you want to refund this bill? This will reverse revenue and commission.', async () => {
+                        try {
+                            const now = Timestamp.now();
+                            const billRef = db.collection('bills').doc(billId);
+                            const billSnap = await billRef.get();
+                            if (!billSnap.exists) { showModal('Not Found', 'Bill not found.'); return; }
+                            const bill = billSnap.data();
+                            if (bill.status === 'refunded') { showModal('Already Refunded', 'This bill has already been refunded.'); return; }
+
+                            // Mark bill as refunded
+                            await billRef.update({ status: 'refunded', refundedAt: now });
+
+                            // Reverse income
+                            await db.collection('transactions').add({ type: 'income', amount: -Number(bill.total || 0), description: `Refund for Bill #${bill.billNumber}`, relatedBillId: billId, date: now });
+
+                            // Reverse commission if applicable
+                            if (bill.referredById) {
+                                const doctorRef = db.collection('doctors').doc(bill.referredById);
+                                const doctorSnap = await doctorRef.get();
+                                const percent = doctorSnap.exists ? (doctorSnap.data().commissionPercent || 0) : 0;
+                                if (percent > 0) {
+                                    const commissionAmount = Number(bill.subtotal || 0) * (percent / 100);
+                                    await doctorRef.update({ commissionBalance: FieldValue.increment(-commissionAmount) });
+                                    await db.collection('transactions').add({ type: 'commission', amount: -commissionAmount, description: `Commission reversal for Bill #${bill.billNumber}`, relatedBillId: billId, relatedDoctorId: bill.referredById, date: now });
+                                }
+                            }
+
+                            showModal('Refunded', 'Bill has been refunded successfully.');
+                        } catch (error) {
+                            console.error('Refund error:', error);
+                            showModal('Error', 'Failed to refund bill. Please try again.');
+                        }
+                    });
+                }
+                
+                // ========================================================================
+                // --- 9. DASHBOARD & REPORTS ---
+                // ========================================================================
+                
+                async function renderDashboard() {
+                    const content = document.getElementById('page-content');
+                    content.innerHTML = `<div id="dashboard-loader" class="text-center py-10"><div class="spinner h-12 w-12 mx-auto border-4"></div></div><div id="dashboard-content" class="hidden"></div>`;
+
+                    try {
+                        // Fetch today's data
+                        const today = new Date();
+                        today.setHours(0, 0, 0, 0);
+                        const startOfDay = Timestamp.fromDate(today);
+
+                        const [patientsSnap, transactionsSnap, expendituresSnap] = await Promise.all([
+                            db.collection('patients').where('createdAt', '>=', startOfDay).get(),
+                            db.collection('transactions').where('date', '>=', startOfDay).get(),
+                            db.collection('expenditures').where('date', '>=', startOfDay).get()
+                        ]);
+
+                        const dailyPatients = patientsSnap.size;
+                        let dailyIncomeTotal = 0, dailyCommission = 0, dailyExpenditureTotal = 0;
+
+                        transactionsSnap.forEach(doc => {
+                            const t = doc.data();
+                            if (t.type === 'income') dailyIncomeTotal += t.amount;
+                            if (t.type === 'commission') dailyCommission += t.amount;
+                        });
+
+                        expendituresSnap.forEach(doc => {
+                            dailyExpenditureTotal += doc.data().amount;
+                        });
+
+                        // Prepare data for the chart (last 7 days)
+                        const labels = [];
+                        const incomeData = [];
+                        const expenditureData = [];
+                        for (let i = 6; i >= 0; i--) {
+                            const d = new Date();
+                            d.setDate(d.getDate() - i);
+                            labels.push(d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }));
+                            incomeData.push(0);
+                            expenditureData.push(0);
+                        }
+
+                        const sevenDaysAgo = new Date();
+                        sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+                        sevenDaysAgo.setHours(0,0,0,0);
+                        const startTimestamp = Timestamp.fromDate(sevenDaysAgo);
+
+                        const [allTransactionsSnap, expenditureTxs] = await Promise.all([
+                            db.collection('transactions').where('date', '>=', startTimestamp).get(),
+                            db.collection('expenditures').where('date', '>=', startTimestamp).get()
+                        ]);
+
+                        const incomeDocs = allTransactionsSnap.docs.filter(doc => doc.data().type === 'income');
+
+                        const mapDateToValue = (docs) => {
+                            const dateMap = {};
+                            docs.forEach(doc => {
+                                const date = doc.data().date.toDate().toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+                                dateMap[date] = (dateMap[date] || 0) + doc.data().amount;
+                            });
+                            return dateMap;
+                        };
+
+                        const dailyIncomeMap = mapDateToValue(incomeDocs);
+                        const dailyExpenditureMap = mapDateToValue(expenditureTxs.docs);
+
+                        labels.forEach((label, index) => {
+                            if (dailyIncomeMap[label]) incomeData[index] = dailyIncomeMap[label];
+                            if (dailyExpenditureMap[label]) expenditureData[index] = dailyExpenditureMap[label];
+                        });
+
+                        // Render daily data on the dashboard
+                        document.getElementById('dashboard-content').innerHTML = `
+                            <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+                                <div class="bg-white p-6 rounded-xl shadow-lg"><h3 class="text-gray-500">Daily Patients</h3><p class="text-3xl font-bold">${dailyPatients}</p></div>
+                                <div class="bg-white p-6 rounded-xl shadow-lg"><h3 class="text-gray-500">Daily Income</h3><p class="text-3xl font-bold text-green-600">₹${dailyIncomeTotal.toLocaleString('en-IN')}</p></div>
+                                <div class="bg-white p-6 rounded-xl shadow-lg"><h3 class="text-gray-500">Daily Commission</h3><p class="text-3xl font-bold text-orange-500">₹${dailyCommission.toLocaleString('en-IN')}</p></div>
+                                <div class="bg-white p-6 rounded-xl shadow-lg"><h3 class="text-gray-500">Daily Expenditure</h3><p class="text-3xl font-bold text-red-600">₹${dailyExpenditureTotal.toLocaleString('en-IN')}</p></div>
+                            </div>
+                            <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mt-6">
+                                <div class="bg-white p-6 rounded-xl shadow-lg">
+                                    <h3 class="text-lg font-semibold text-gray-700 mb-4">Last 7 Days Financial Overview</h3>
+                                    <canvas id="financial-chart"></canvas>
+                                </div>
+                                <div class="bg-white p-6 rounded-xl shadow-lg">
+                                    <h3 class="text-lg font-semibold text-gray-700 mb-4">Last 30 Days - Daily Expenditure</h3>
+                                    <canvas id="expenditure-30-chart"></canvas>
+                                </div>
+                            </div>
+                            <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mt-6">
+                                <div class="bg-white p-6 rounded-xl shadow-lg">
+                                    <h3 class="text-lg font-semibold text-gray-700 mb-4">Last 30 Days - Daily Patient Visits</h3>
+                                    <canvas id="patients-30-chart"></canvas>
+                                </div>
+                                <div class="bg-white p-6 rounded-xl shadow-lg">
+                                    <h3 class="text-lg font-semibold text-gray-700 mb-4">Last 30 Days - Daily Revenue</h3>
+                                    <canvas id="revenue-30-chart"></canvas>
+                                </div>
+                            </div>`;
+
+                        document.getElementById('dashboard-loader').classList.add('hidden');
+                        document.getElementById('dashboard-content').classList.remove('hidden');
+
+                        // Ensure canvas elements are available before rendering charts
+                        const financialChartCanvas = document.getElementById('financial-chart');
+                        const expenditureChartCanvas = document.getElementById('expenditure-30-chart');
+                        const patientsChartCanvas = document.getElementById('patients-30-chart');
+                        const revenueChartCanvas = document.getElementById('revenue-30-chart');
+
+                        if (financialChartCanvas && expenditureChartCanvas && patientsChartCanvas && revenueChartCanvas) {
+                            // Render Chart
+                            const ctx = financialChartCanvas.getContext('2d');
+                            new Chart(ctx, {
+                                type: 'bar',
+                                data: {
+                                    labels: labels,
+                                    datasets: [
+                                        {
+                                            label: 'Income',
+                                            data: incomeData,
+                                            backgroundColor: 'rgba(54, 162, 235, 0.6)',
+                                            borderColor: 'rgba(54, 162, 235, 1)',
+                                            borderWidth: 1
+                                        },
+                                        {
+                                            label: 'Expenditure',
+                                            data: expenditureData,
+                                            backgroundColor: 'rgba(255, 99, 132, 0.6)',
+                                            borderColor: 'rgba(255, 99, 132, 1)',
+                                            borderWidth: 1
+                                        }
+                                    ]
+                                },
+                                options: { scales: { y: { beginAtZero: true } } }
+                            });
+
+                            // Prepare last 30 days labels
+                            const labels30 = [];
+                            const labelToIndex = {};
+                            for (let i = 29; i >= 0; i--) {
+                                const d = new Date();
+                                d.setDate(d.getDate() - i);
+                                const label = d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+                                labels30.push(label);
+                                labelToIndex[label] = labels30.length - 1;
+                            }
+
+                            const patientVisits = new Array(30).fill(0);
+                            const revenue30 = new Array(30).fill(0);
+                            const expenditure30 = new Array(30).fill(0);
+
+                            const thirtyDaysAgo = new Date();
+                            thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+                            thirtyDaysAgo.setHours(0,0,0,0);
+                            const start30Ts = Timestamp.fromDate(thirtyDaysAgo);
+
+                            const [bills30Snap, income30Snap, expenditure30Snap] = await Promise.all([
+                                db.collection('bills').where('createdAt', '>=', start30Ts).get(),
+                                db.collection('transactions').where('date', '>=', start30Ts).get(),
+                                db.collection('expenditures').where('date', '>=', start30Ts).get()
+                            ]);
+
+                            // Patient visits based on bills per day (count bills per day)
+                            bills30Snap.forEach(doc => {
+                                const b = doc.data();
+                                const label = b.createdAt.toDate().toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+                                const idx = labelToIndex[label];
+                                if (idx !== undefined) patientVisits[idx] += 1;
+                            });
+
+                            // Revenue from income transactions only
+                            income30Snap.forEach(doc => {
+                                const t = doc.data();
+                                if (t.type !== 'income') return;
+                                const label = t.date.toDate().toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+                                const idx = labelToIndex[label];
+                                if (idx !== undefined) revenue30[idx] += Number(t.amount || 0);
+                            });
+
+                            // Expenditure per day
+                            expenditure30Snap.forEach(doc => {
+                                const e = doc.data();
+                                if (!e.date) return;
+                                const label = e.date.toDate().toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+                                const idx = labelToIndex[label];
+                                if (idx !== undefined) expenditure30[idx] += Number(e.amount || 0);
+                            });
+
+                            // Render line charts
+                            const patientsChartCtx = document.getElementById('patients-30-chart').getContext('2d');
+                            new Chart(patientsChartCtx, {
+                                type: 'line',
+                                data: {
+                                    labels: labels30,
+                                    datasets: [{
+                                        label: 'Patients',
+                                        data: patientVisits,
+                                        tension: 0.3,
+                                        fill: false,
+                                        borderColor: '#2563eb',
+                                        backgroundColor: 'rgba(37, 99, 235, 0.2)',
+                                        pointRadius: 2
+                                    }]
+                                },
+                                options: { scales: { y: { beginAtZero: true, ticks: { precision: 0 } } } }
+                            });
+
+                            const revenueChartCtx = document.getElementById('revenue-30-chart').getContext('2d');
+                            new Chart(revenueChartCtx, {
+                                type: 'line',
+                                data: {
+                                    labels: labels30,
+                                    datasets: [{
+                                        label: 'Revenue (₹)',
+                                        data: revenue30,
+                                        tension: 0.3,
+                                        fill: false,
+                                        borderColor: '#059669',
+                                        backgroundColor: 'rgba(5, 150, 105, 0.2)',
+                                        pointRadius: 2
+                                    }]
+                                },
+                                options: { scales: { y: { beginAtZero: true } } }
+                            });
+
+                            const expenditureChartCtx = document.getElementById('expenditure-30-chart').getContext('2d');
+                            new Chart(expenditureChartCtx, {
+                                type: 'line',
+                                data: {
+                                    labels: labels30,
+                                    datasets: [{
+                                        label: 'Expenditure (₹)',
+                                        data: expenditure30,
+                                        tension: 0.3,
+                                        fill: false,
+                                        borderColor: '#dc2626',
+                                        backgroundColor: 'rgba(220, 38, 38, 0.2)',
+                                        pointRadius: 2
+                                    }]
+                                },
+                                options: { scales: { y: { beginAtZero: true } } }
+                            });
+
+                        } else {
+                            console.error("Canvas elements not found for rendering charts.");
+                        }
+
+                    } catch (error) {
+                        console.error("Error loading dashboard:", error);
+                        document.getElementById('dashboard-loader').textContent = "Failed to load dashboard data.";
+                        showModal('Error', 'Failed to load dashboard data.');
+                    }
+                }
+
+                async function renderReportsPage() {
+                    const content = document.getElementById('page-content');
+                    content.innerHTML = `
+                        <div class="bg-white p-6 rounded-xl shadow-lg space-y-6">
+                            <h2 class="text-xl font-bold text-gray-800">Financial Reports</h2>
+                            <div class="flex flex-wrap items-end gap-4 p-4 border rounded-lg bg-gray-50">
+                                <div>
+                                    <label for="start-date" class="block text-sm font-medium text-gray-700">Start Date</label>
+                                    <input type="date" id="start-date" class="mt-1 p-2 border rounded-md">
+                                </div>
+                                <div>
+                                    <label for="end-date" class="block text-sm font-medium text-gray-700">End Date</label>
+                                    <input type="date" id="end-date" class="mt-1 p-2 border rounded-md">
+                                </div>
+                                <button id="generate-report-btn" class="px-4 py-2 bg-blue-600 text-white font-semibold rounded-md">Generate Report</button>
+                            </div>
+                            <div id="report-output">
+                                <div id="report-container" class="overflow-x-auto">
+                                    <p class="text-center text-gray-500 py-8">Please select a date range and click "Generate Report" to view data.</p>
+                                </div>
+                            </div>
+                        </div>`;
+
+                    const generateBtn = document.getElementById('generate-report-btn');
+                    const reportContainer = document.getElementById('report-container');
+                    const reportOutput = document.getElementById('report-output');
+
+                    generateBtn.onclick = async () => {
+                        const startDateStr = document.getElementById('start-date').value;
+                        const endDateStr = document.getElementById('end-date').value;
+
+                        if (!startDateStr || !endDateStr) {
+                            showModal('Invalid Input', 'Please select both a start and end date.');
+                            return;
+                        }
+
+                        const startDate = new Date(startDateStr);
+                        startDate.setHours(0, 0, 0, 0);
+                        const endDate = new Date(endDateStr);
+                        endDate.setHours(23, 59, 59, 999);
+
+                        if (startDate > endDate) {
+                             showModal('Invalid Input', 'Start date cannot be after the end date.');
+                            return;
+                        }
+
+                        reportOutput.innerHTML = `<div id="report-container" class="overflow-x-auto"><div class="text-center py-10"><div class="spinner h-12 w-12 mx-auto border-4"></div><p class="mt-4">Fetching report data...</p></div></div>`;
+                        
+                        try {
+                            const startTimestamp = Timestamp.fromDate(startDate);
+                            const endTimestamp = Timestamp.fromDate(endDate);
+
+                            const [billsSnap, expendituresSnap, allTransactionsSnap] = await Promise.all([
+                                db.collection('bills').where('createdAt', '>=', startTimestamp).where('createdAt', '<=', endTimestamp).get(),
+                                db.collection('expenditures').where('date', '>=', startTimestamp).where('date', '<=', endTimestamp).get(),
+                                db.collection('transactions').where('date', '>=', startTimestamp).where('date', '<=', endTimestamp).get()
+                            ]);
+                            
+                            const commissionsDocs = allTransactionsSnap.docs.filter(doc => doc.data().type === 'commission');
+                            const dailyData = {};
+
+                            billsSnap.docs.forEach(doc => {
+                                const data = doc.data();
+                                const dateStr = data.createdAt.toDate().toISOString().split('T')[0];
+                                if (!dailyData[dateStr]) dailyData[dateStr] = { patients: new Set(), revenue: 0, expenditure: 0, commission: 0 };
+                                dailyData[dateStr].patients.add(data.patientId);
+                                dailyData[dateStr].revenue += (Number(data.total) || 0);
+                            });
+
+                            expendituresSnap.docs.forEach(doc => {
+                                 const data = doc.data();
+                                 const dateStr = data.date?.toDate().toISOString().split('T')[0];
+                                 if (dateStr) {
+                                    if (!dailyData[dateStr]) dailyData[dateStr] = { patients: new Set(), revenue: 0, expenditure: 0, commission: 0 };
+                                    dailyData[dateStr].expenditure += (Number(data.amount) || 0);
+                                 }
+                            });
+
+                            commissionsDocs.forEach(doc => {
+                                const data = doc.data();
+                                const dateStr = data.date?.toDate().toISOString().split('T')[0];
+                                if(dateStr) {
+                                    if (!dailyData[dateStr]) dailyData[dateStr] = { patients: new Set(), revenue: 0, expenditure: 0, commission: 0 };
+                                    dailyData[dateStr].commission += (Number(data.amount) || 0);
+                                }
+                            });
+
+                            const sortedDates = Object.keys(dailyData).sort();
+                            if(sortedDates.length === 0) {
+                                reportOutput.innerHTML = `<div id="report-container" class="overflow-x-auto"><p class="text-center text-gray-500 py-8">No data found for the selected date range.</p></div>`;
+                                return;
+                            }
+                            
+                            const reportTitle = `
+                                <div class="flex justify-between items-center mb-4">
+                                   <h3 class="text-lg font-bold">Financial Report (from ${startDate.toLocaleDateString()} to ${endDate.toLocaleDateString()})</h3>
+                                   <button id="download-report-btn" class="px-4 py-2 bg-green-600 text-white font-semibold rounded-md">Download PDF</button>
+                                </div>
+                            `;
+
+                            let tableHTML = `<table id="report-table" class="min-w-full divide-y divide-gray-200"><thead class="bg-gray-50"><tr>
+                                <th class="px-6 py-3">Date</th>
+                                <th class="px-6 py-3">Patients</th>
+                                <th class="px-6 py-3">Revenue</th>
+                                <th class="px-6 py-3">Expenditure</th>
+                                <th class="px-6 py-3">Commission</th>
+                                <th class="px-6 py-3">Net Profit</th>
+                            </tr></thead><tbody class="bg-white divide-y divide-gray-200">`;
+
+                            let totalPatientsCount = 0, totalRevenue = 0, totalExpenditure = 0, totalCommission = 0;
+                            sortedDates.forEach(dateStr => {
+                                const data = dailyData[dateStr];
+                                const netProfit = data.revenue - data.expenditure - data.commission;
+                                totalPatientsCount += data.patients.size;
+                                totalRevenue += data.revenue;
+                                totalExpenditure += data.expenditure;
+                                totalCommission += data.commission;
+                                tableHTML += `<tr>
+                                    <td class="px-6 py-4">${new Date(dateStr).toLocaleDateString()}</td>
+                                    <td class="px-6 py-4">${data.patients.size}</td>
+                                    <td class="px-6 py-4 text-green-600 font-semibold">₹${data.revenue.toFixed(2)}</td>
+                                    <td class="px-6 py-4 text-red-600 font-semibold">₹${data.expenditure.toFixed(2)}</td>
+                                    <td class="px-6 py-4 text-orange-500 font-semibold">₹${data.commission.toFixed(2)}</td>
+                                    <td class="px-6 py-4 font-bold ${netProfit >= 0 ? 'text-blue-600' : 'text-red-700'}">₹${netProfit.toFixed(2)}</td>
+                                </tr>`;
+                            });
+                            const totalNetProfit = totalRevenue - totalExpenditure - totalCommission;
+                            tableHTML += `<tr class="bg-gray-100 font-bold">
+                                <td class="px-6 py-4">Total</td>
+                                <td class="px-6 py-4">${totalPatientsCount}</td>
+                                <td class="px-6 py-4">₹${totalRevenue.toFixed(2)}</td>
+                                <td class="px-6 py-4">₹${totalExpenditure.toFixed(2)}</td>
+                                <td class="px-6 py-4">₹${totalCommission.toFixed(2)}</td>
+                                <td class="px-6 py-4">₹${(totalRevenue - totalExpenditure - totalCommission).toFixed(2)}</td>
+                            </tr>`;
+
+                            tableHTML += `</tbody></table>`;
+
+                            // Compose a dedicated A4-width container for clean export
+                            let headerBlock = `
+                                <div style="text-align:center; border-bottom:2px solid #000; padding-bottom:10px; margin-bottom:16px;">
+                                    <div style="font-size:22px; font-weight:700; color:#000;">Perfect Diagnostic and Ultrasound Centre</div>
+                                    <div style="font-size:12px; margin-top:4px;">Near Government Hospital, Front of Old Gate, Partawal Bazar, Maharajganj, Uttar Pradesh</div>
+                                    <div style="font-size:12px; margin-top:2px;">Phone: +91 9838104111 , +91 9616434212 | Email: perfectdiagnostic@gmail.com</div>
+                                </div>`;
+
+                            let reportHeading = `<div style="font-size:16px; font-weight:700; margin-bottom:12px;">Financial Report: ${startDate.toLocaleDateString()} to ${endDate.toLocaleDateString()}</div>`;
+
+                            let pdfRoot = `
+                                <div id="report-pdf-root" style="width:800px; margin:0 auto; background:#ffffff; color:#333; font-family:sans-serif; padding:20px;">
+                                                       ${headerBlock}
+                            ${reportHeading}
+                            <div style="overflow:hidden;">
+                                <table style="width:100%; border-collapse:collapse; font-size:12px;">
+                                    <thead>
+                                        <tr style="background:#f3f4f6;">
+                                            <th style="text-align:left; padding:8px; border:1px solid #e5e7eb;">Date</th>
+                                            <th style="text-align:right; padding:8px; border:1px solid #e5e7eb;">Patients</th>
+                                            <th style="text-align:right; padding:8px; border:1px solid #e5e7eb;">Revenue</th>
+                                            <th style="text-align:right; padding:8px; border:1px solid #e5e7eb;">Expenditure</th>
+                                            <th style="text-align:right; padding:8px; border:1px solid #e5e7eb;">Commission</th>
+                                            <th style="text-align:right; padding:8px; border:1px solid #e5e7eb;">Net Profit</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                    ${sortedDates.map(dateStr => {
+                                        const data = dailyData[dateStr];
+                                        const netProfit = data.revenue - data.expenditure - data.commission;
+                                        return `<tr>
+                                            <td style=\"padding:8px; border:1px solid #e5e7eb;\">${new Date(dateStr).toLocaleDateString()}</td>
+                                            <td style=\"padding:8px; text-align:right; border:1px solid #e5e7eb;\">${data.patients.size}</td>
+                                            <td style=\"padding:8px; text-align:right; border:1px solid #e5e7eb; color:#059669; font-weight:600;\">₹${data.revenue.toFixed(2)}</td>
+                                            <td style=\"padding:8px; text-align:right; border:1px solid #e5e7eb; color:#dc2626; font-weight:600;\">₹${data.expenditure.toFixed(2)}</td>
+                                            <td style=\"padding:8px; text-align:right; border:1px solid #e5e7eb; color:#ea580c; font-weight:600;\">₹${data.commission.toFixed(2)}</td>
+                                            <td style=\"padding:8px; text-align:right; border:1px solid #e5e7eb; font-weight:700; color:${netProfit >= 0 ? '#2563eb' : '#b91c1c'};\">₹${netProfit.toFixed(2)}</td>
+                                        </tr>`;
+                                    }).join('')}
+                                    <tr style=\"background:#f3f4f6; font-weight:700;\">
+                                        <td style=\"padding:8px; border:1px solid #e5e7eb;\">Total</td>
+                                        <td style=\"padding:8px; text-align:right; border:1px solid #e5e7eb;\">${totalPatientsCount}</td>
+                                        <td style=\"padding:8px; text-align:right; border:1px solid #e5e7eb;\">₹${totalRevenue.toFixed(2)}</td>
+                                        <td style=\"padding:8px; text-align:right; border:1px solid #e5e7eb;\">₹${totalExpenditure.toFixed(2)}</td>
+                                        <td style=\"padding:8px; text-align:right; border:1px solid #e5e7eb;\">₹${totalCommission.toFixed(2)}</td>
+                                        <td style=\"padding:8px; text-align:right; border:1px solid #e5e7eb;\">₹${(totalRevenue - totalExpenditure - totalCommission).toFixed(2)}</td>
+                                    </tr>`;
+
+                            reportOutput.innerHTML = reportTitle + `<div class="overflow-x-auto">${pdfRoot}</div>`;
+
+                            document.getElementById('download-report-btn').onclick = () => {
+                                const reportContent = document.getElementById('report-pdf-root');
+                                if (reportContent) {
+                                    const { jsPDF } = window.jspdf;
+                                    html2canvas(reportContent, { scale: 2, useCORS: true, backgroundColor: '#ffffff' }).then(canvas => {
+                                        const imgData = canvas.toDataURL('image/png');
+                                        const pdf = new jsPDF('p', 'mm', 'a4');
+                                        const pdfWidth = pdf.internal.pageSize.getWidth();
+                                        const pdfHeight = (canvas.height * (pdfWidth - 20)) / canvas.width; // 10mm margin
+                                        pdf.addImage(imgData, 'PNG', 10, 10, pdfWidth - 20, pdfHeight);
+                                        pdf.save(`financial_report_${startDateStr}_to_${endDateStr}.pdf`);
+                                    });
+                                }
+                            };
+                        } catch (error) {
+                            console.error("Error generating report:", error);
+                            reportOutput.innerHTML = `<div id="report-container" class="overflow-x-auto"><p class="text-center text-red-500 py-8">Failed to generate report. Please check the console.</p></div>`;
+                        }
+                    };
+                }
+
+                // ========================================================================
+                // --- 9b. COMMISSION MANAGEMENT PAGE ---
+                // ========================================================================
+                async function renderCommissionManagementPage() {
+                    const content = document.getElementById('page-content');
+                    const currentYear = new Date().getFullYear();
+                    const years = Array.from({ length: 6 }, (_, i) => currentYear - i);
+                    const months = [
+                        'January','February','March','April','May','June','July','August','September','October','November','December'
+                    ];
+
+                    content.innerHTML = `
+                        <div class="bg-white p-6 rounded-xl shadow-lg space-y-4">
+                            <div class="flex flex-wrap gap-4 items-end">
+                                <div>
+                                    <label class="block text-sm font-medium text-gray-700">Year</label>
+                                    <select id="cm-year" class="mt-1 p-2 border rounded-md">
+                                        ${years.map(y => `<option value="${y}" ${y===currentYear?'selected':''}>${y}</option>`).join('')}
+                                    </select>
+                                </div>
+                                <div>
+                                    <label class="block text-sm font-medium text-gray-700">Month</label>
+                                    <select id="cm-month" class="mt-1 p-2 border rounded-md">
+                                        ${months.map((m, i) => `<option value="${i}">${m}</option>`).join('')}
+                                    </select>
+                                </div>
+                                <button id="cm-apply" class="px-4 py-2 bg-blue-600 text-white font-semibold rounded-md">Apply</button>
+                            </div>
+                            <div class="overflow-x-auto">
+                                <table class="min-w-full divide-y divide-gray-200">
+                                    <thead class="bg-gray-50">
+                                        <tr>
+                                            <th class="px-6 py-3 text-left">Doctor</th>
+                                            <th class="px-6 py-3 text-left">Location</th>
+                                            <th class="px-6 py-3 text-right">Commission Earned</th>
+                                            <th class="px-6 py-3 text-right">Commission Paid</th>
+                                            <th class="px-6 py-3 text-right">Pending</th>
+                                            <th class="px-6 py-3 text-left">Status</th>
+                                            <th class="px-6 py-3 text-left">Actions</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="cm-body" class="bg-white divide-y divide-gray-200"></tbody>
+                                </table>
+                            </div>
+                        </div>`;
+
+                    const applyBtn = document.getElementById('cm-apply');
+                    applyBtn.onclick = loadAndRender;
+                    await loadAndRender();
+
+                    async function loadAndRender() {
+                        const year = parseInt(document.getElementById('cm-year').value);
+                        const month = parseInt(document.getElementById('cm-month').value);
+                        const start = new Date(year, month, 1, 0, 0, 0, 0);
+                        const end = new Date(year, month + 1, 0, 23, 59, 59, 999);
+                        const startTs = Timestamp.fromDate(start);
+                        const endTs = Timestamp.fromDate(end);
+
+                        const [doctorsSnap, billsSnap, txSnap, paidMonthlySnap] = await Promise.all([
+                            db.collection('doctors').get(),
+                            db.collection('bills').where('createdAt', '>=', startTs).where('createdAt', '<=', endTs).get(),
+                            db.collection('transactions').where('date', '>=', startTs).where('date', '<=', endTs).get(),
+                            db.collection('commission_paid_monthly').where('year', '==', year).where('month', '==', month).get()
+                        ]);
+
+                        const doctorMap = new Map();
+                        doctorsSnap.forEach(doc => {
+                            const d = doc.data();
+                            doctorMap.set(doc.id, { id: doc.id, name: d.name || 'N/A', location: d.location || '—', percent: Number(d.commissionPercent || 0), earned: 0, paid: 0 });
+                        });
+
+                        // Commission earned from bills in month
+                        billsSnap.forEach(doc => {
+                            const b = doc.data();
+                            if (b.status === 'refunded') return;
+                            if (!b.referredById) return;
+                            const dm = doctorMap.get(b.referredById);
+                            if (!dm) return;
+                            dm.earned += Number(b.subtotal || 0) * (dm.percent / 100);
+                        });
+
+                        // Commission paid: prefer admin-entered monthly totals (exact values)
+                        const monthlyPaidMap = new Map();
+                        paidMonthlySnap.forEach(doc => {
+                            const d = doc.data();
+                            monthlyPaidMap.set(d.doctorId, { totalPaid: Number(d.totalPaid || 0), locked: !!d.locked });
+                        });
+                        doctorMap.forEach((dm, id) => {
+                            if (monthlyPaidMap.has(id)) {
+                                const rec = monthlyPaidMap.get(id);
+                                dm.paid = rec.totalPaid;
+                                dm.locked = rec.locked;
+                            } else {
+                                // Fallback: derive from transactions if no monthly record exists
+                                dm.paid = 0;
+                                dm.locked = false;
+                            }
+                        });
+
+                        const tbody = document.getElementById('cm-body');
+                        tbody.innerHTML = '';
+                        doctorMap.forEach(d => {
+                            const pending = Math.max(0, d.earned - d.paid);
+                            const tr = document.createElement('tr');
+                            tr.innerHTML = `
+                                <td class="px-6 py-4">${d.name}</td>
+                                <td class="px-6 py-4">${d.location}</td>
+                                <td class="px-6 py-4 text-right">₹${d.earned.toFixed(2)}</td>
+                                <td class="px-6 py-4 text-right">₹${d.paid.toFixed(2)}</td>
+                                <td class="px-6 py-4 text-right font-semibold ${pending>0?'text-orange-600':'text-green-700'}">₹${pending.toFixed(2)}</td>
+                                <td class="px-6 py-4">${d.locked ? '<span class="px-2 py-1 rounded text-xs font-semibold bg-green-100 text-green-700">paid</span>' : '<span class="px-2 py-1 rounded text-xs font-semibold bg-red-100 text-red-700">unpaid</span>'}</td>
+                                <td class="px-6 py-4 space-x-3">
+                                    ${d.locked ? '<span class="text-gray-400 text-sm">Locked</span>' : `<button data-id="${d.id}" data-earned="${d.earned}" class="cm-markpaid text-blue-600 font-semibold hover:underline">Mark Paid</button>`}
+                                </td>`;
+                            tbody.appendChild(tr);
+                        });
+
+                        // Actions
+                        tbody.querySelectorAll('.cm-markpaid').forEach(btn => {
+                            btn.onclick = () => confirmAndMarkPaid(btn.getAttribute('data-id'), parseFloat(btn.getAttribute('data-earned')||'0'));
+                        });
+
+                        function promptAddPaid(doctorId) {
+                            const container = document.createElement('div');
+                            container.innerHTML = `<div class="space-y-3"><label class="block text-sm">Amount (₹)</label><input id="cm-amount" type="number" min="0" class="w-full p-2 border rounded-md" placeholder="0"/></div>`;
+                            showModal('Add Commission Paid', 'Enter amount to add as paid.', [
+                                { text: 'Cancel', class: 'bg-gray-500 hover:bg-gray-600', action: hideModal },
+                                { text: 'Add', class: 'bg-blue-600 hover:bg-blue-700', action: async () => {
+                                    const inputEl = container.querySelector('#cm-amount');
+                                    const amt = parseFloat(inputEl && inputEl.value ? inputEl.value : '0');
+                                    if (!(amt > 0)) { showModal('Invalid', 'Amount must be greater than 0'); return; }
+                                    // Update monthly aggregate doc
+                                    const y = parseInt(document.getElementById('cm-year').value), m = parseInt(document.getElementById('cm-month').value);
+                                    const key = `${doctorId}_${y}_${m}`;
+                                    const docRef = db.collection('commission_paid_monthly').doc(key);
+                                    await db.runTransaction(async t => {
+                                        const snap = await t.get(docRef);
+                                        const curr = snap.exists ? (snap.data().totalPaid || 0) : 0;
+                                        t.set(docRef, { doctorId, year: y, month: m, totalPaid: curr + amt }, { merge: true });
+                                    });
+                                    await loadAndRender();
+                                }}
+                            ]);
+                            // Inject inputs into modal message area
+                            const msgEl = document.getElementById('generic-modal-message');
+                            if (msgEl) { msgEl.innerHTML = ''; msgEl.appendChild(container.firstChild); }
+                        }
+
+                        function confirmAndMarkPaid(doctorId, earned) {
+                            showConfirmationModal('Mark Paid', 'Are you sure you want to mark this month as PAID? Once marked, it cannot be changed.', async () => {
+                                const y = parseInt(document.getElementById('cm-year').value), m = parseInt(document.getElementById('cm-month').value);
+                                const key = `${doctorId}_${y}_${m}`;
+                                await db.collection('commission_paid_monthly').doc(key).set({ doctorId, year: y, month: m, totalPaid: earned, locked: true, settledAt: Timestamp.now() }, { merge: true });
+                                await loadAndRender();
+                            });
+                        }
+
+                        // PDF download removed per request
+                    }
+                }
+
+                // ========================================================================
+                // --- 10. PDF GENERATION & PRINTING ---
+                // ========================================================================
+                async function generateAndDownloadPDF(billId, action = 'download') {
+                    const { jsPDF } = window.jspdf;
+                    const loaderId = 'pdf-loader';
+                    if (document.getElementById(loaderId)) return;
+
+                    const loader = document.createElement('div');
+                    loader.id = loaderId;
+                    loader.innerHTML = `<div class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-[100]"><div class="spinner h-12 w-12 rounded-full border-4"></div><p class="text-white ml-4">Generating PDF...</p></div>`;
+                    document.body.appendChild(loader);
+
+                    try {
+                        const billDoc = await db.collection('bills').doc(billId).get();
+                        if (!billDoc.exists) throw new Error("Bill not found");
+                        
+                        const bill = billDoc.data();
+                        const doctorName = bill.referredById ? (await db.collection('doctors').doc(bill.referredById).get()).data()?.name || 'N/A' : 'N/A';
+                        
+                        const patient = bill.patientDetails;
+
+                        const itemsHtml = bill.items.map((item, index) => `
+                            <tr style="border-bottom: 1px solid #eee;">
+                                <td style="padding: 8px; text-align: center;">${index + 1}</td>
+                                <td style="padding: 8px;">${item.name}</td>
+                                <td style="padding: 8px; text-align: right;">${(item.price * item.quantity).toFixed(2)}</td>
+                            </tr>`).join('');
+
+                        const discountAmount = bill.subtotal * (bill.discountPercent / 100);
+                        const totalAfterDiscount = bill.subtotal - discountAmount;
+                        const gstAmount = totalAfterDiscount * (bill.gstPercent / 100);
+
+                        const pdfHTML = `
+                        <div style="width: 800px; font-family: sans-serif; color: #333; background: white; padding: 20px;">
+                            <div style="text-align: center; border-bottom: 2px solid #000; padding-bottom: 10px; margin-bottom: 20px;">
+                                <h1 style="font-size: 28px; font-weight: bold; margin: 0; color: #000;">Perfect Diagnostic and Ultrasound Centre</h1>
+                                <p style="margin: 5px 0; font-size: 14px;">Near Government Hospital, Front of Old Gate, Partawal Bazar, Maharajganj, Uttar Pradesh</p>
+                                <p style="margin: 5px 0; font-size: 14px;">Phone: +91 9838104111, +91 9616434212 | Email: perfectdiagnostic@gmail.com</p>
+                            </div>
+                            <table style="width: 100%; margin-bottom: 20px; font-size: 14px; border-collapse: collapse;">
+                                <tr>
+                                    <td style="padding: 5px; vertical-align: top; width: 50%;">
+                                        <strong style="display: block; margin-bottom: 5px; font-size: 16px;">Patient Information</strong>
+                                        <strong>Name:</strong> ${patient.name}<br>
+                                        <strong>Age/Gender:</strong> ${patient.age || 'N/A'} Years / ${patient.gender}<br>
+                                        <strong>Mobile:</strong> ${patient.phone || 'N/A'}
+                                    </td>
+                                    <td style="padding: 5px; vertical-align: top; width: 50%; text-align: right;">
+                                         <strong style="display: block; margin-bottom: 5px; font-size: 16px;">Bill Details</strong>
+                                         <strong>Bill No:</strong> ${bill.billNumber}<br>
+                                         <strong>Date:</strong> ${bill.createdAt.toDate().toLocaleDateString()}<br>
+                                         <strong>Doctor Referred:</strong> Dr. ${doctorName}
+                                    </td>
+                                </tr>
+                            </table>
+                            <table style="width: 100%; border-collapse: collapse; font-size: 14px; margin-bottom: 20px;">
+                                <thead style="background-color: #f2f2f2;">
+                                    <tr>
+                                        <th style="padding: 10px; border: 1px solid #ddd; text-align: center;">S.No</th>
+                                        <th style="padding: 10px; border: 1px solid #ddd; text-align: left;">Test Name</th>
+                                        <th style="padding: 10px; border: 1px solid #ddd; text-align: right;">Price (INR)</th>
+                                    </tr>
+                                </thead>
+                                <tbody>${itemsHtml}</tbody>
+                            </table>
+                            <div style="width: 40%; margin-left: 60%; font-size: 14px;">
+                                <table style="width: 100%; border-collapse: collapse;">
+                                    <tr><td style="padding: 8px;">Subtotal:</td><td style="padding: 8px; text-align: right;">${bill.subtotal.toFixed(2)}</td></tr>
+                                    <tr><td style="padding: 8px;">Discount (${bill.discountPercent}%):</td><td style="padding: 8px; text-align: right;">- ${discountAmount.toFixed(2)}</td></tr>
+                                    <tr><td style="padding: 8px; border-bottom: 1px solid #ccc;">GST (${bill.gstPercent}%):</td><td style="padding: 8px; text-align: right; border-bottom: 1px solid #ccc;">+ ${gstAmount.toFixed(2)}</td></tr>
+                                    <tr style="font-weight: bold; font-size: 16px;"><td style="padding: 10px 8px;">Total:</td><td style="padding: 10px 8px; text-align: right;">${bill.total.toFixed(2)}</td></tr>
+                                </table>
+                            </div>
+                            <div style="margin-top: 40px; text-align: center; font-size: 12px; color: #777;">
+                                <p>Thank you for choosing Perfect Diagnostic and Ultrasound Centre. For any queries, please contact us.</p>
+                                <p style="font-style: italic;">This is a computer-generated bill and does not require a signature.</p>
+                            </div>
+                        </div>`;
+                        
+                        // Create a temporary off-screen container (pattern used in report export)
+                        const tempContainer = document.createElement('div');
+                        tempContainer.style.position = 'absolute';
+                        tempContainer.style.left = '-9999px';
+                        tempContainer.style.top = '0';
+                        tempContainer.style.width = '800px';
+                        tempContainer.style.background = '#ffffff';
+                        tempContainer.innerHTML = pdfHTML;
+                        document.body.appendChild(tempContainer);
+
+                        // Wait a frame for layout
+                        await new Promise(resolve => requestAnimationFrame(resolve));
+
+                        const canvas = await html2canvas(tempContainer, {
+                            scale: 2,
+                            useCORS: true,
+                            backgroundColor: '#ffffff'
+                        });
+                        
+                        // Clean up DOM
+                        tempContainer.remove();
+
+                        const imgData = canvas.toDataURL('image/png');
+                        const pdf = new jsPDF('p', 'mm', 'a4');
+                        const pdfWidth = pdf.internal.pageSize.getWidth();
+                        const pdfHeight = (canvas.height * (pdfWidth - 20)) / canvas.width; // 10mm margin each side
+                        pdf.addImage(imgData, 'PNG', 10, 10, pdfWidth - 20, pdfHeight);
+                        
+                        if (action === 'print') {
+                            const blobUrl = pdf.output('bloburl');
+                            const printWindow = window.open(blobUrl, '_blank');
+                            if (printWindow) {
+                                printWindow.addEventListener('load', () => {
+                                    printWindow.focus();
+                                    printWindow.print();
+                                });
+                            }
+                        } else {
+                            pdf.save(`${bill.billNumber}_${patient.name.replace(/ /g, '_')}.pdf`);
+                        }
+
+                    } catch (error) {
+                        console.error("PDF Generation Error:", error);
+                        showModal('PDF Error', "Failed to generate PDF: " + error.message);
+                    } finally {
+                        document.getElementById(loaderId)?.remove();
+                    }
+                }
+                
+                // --- Initial Render ---
+                renderApp();
+            })
+            .catch(error => {
+                console.error('Failed to load Firebase config:', error);
+                alert('Failed to load Firebase configuration. Please try again later.');
+            });
+    });
+    </script>
+</body>
+</html>
