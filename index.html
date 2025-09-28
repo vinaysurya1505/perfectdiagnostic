@@ -201,7 +201,6 @@
                         case 'expenditures': renderAdminLayout('Expenditures', initializeExpendituresPage); break;
                         case 'reports': renderAdminLayout('Financial Reports', renderReportsPage); break;
                         case 'commissions': renderAdminLayout('Commission Management', renderCommissionManagementPage); break;
-                        case 'patient-management': renderAdminLayout('Patient Management', renderPatientManagementPage); break;
                         default: renderHomePage();
                     }
                 }
@@ -359,7 +358,6 @@
                                     ${SidebarItem('expenditures', 'Expenditure')}
                                     ${SidebarItem('reports', 'Financial Report')}
                                     ${SidebarItem('commissions', 'Commission Management')}
-                                    ${SidebarItem('patient-management', 'Patient Management')}
                                 </nav>
                                 <div class="p-4">
                                     <button id="logout-btn" class="w-full py-2 px-4 text-left rounded-md sidebar-link bg-red-600 hover:bg-red-700 text-white font-semibold">Sign Out</button>
