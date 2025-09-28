@@ -692,6 +692,7 @@
                                 patientId = patientQuery.docs[0].id;
                                 await db.collection('patients').doc(patientId).update(patientDetails);
                             } else {
+                                patientDetails.createdAt = Timestamp.now();
                                 patientId = (await db.collection('patients').add(patientDetails)).id;
                             }
 
