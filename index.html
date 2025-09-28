@@ -1338,10 +1338,27 @@
                                     </select>
                                 </div>
                                 <button id="cm-apply" class="px-4 py-2 bg-blue-600 text-white font-semibold rounded-md">Apply</button>
-                                <div id="cm-total-card" class="bg-gradient-to-r from-blue-50 to-indigo-50 p-4 rounded-lg border border-blue-200 min-w-[200px]">
-                                    <div class="text-sm text-gray-600">Total Commission</div>
-                                    <div id="cm-total-amount" class="text-2xl font-bold text-blue-600">₹0.00</div>
-                                    <div id="cm-total-period" class="text-xs text-gray-500">September 2025</div>
+                                <div class="flex flex-wrap gap-4">
+                                    <div id="cm-total-card" class="bg-gradient-to-r from-blue-50 to-indigo-50 p-4 rounded-lg border border-blue-200 min-w-[180px]">
+                                        <div class="text-sm text-gray-600">Total Commission</div>
+                                        <div id="cm-total-amount" class="text-2xl font-bold text-blue-600">₹0.00</div>
+                                        <div id="cm-total-period" class="text-xs text-gray-500">September 2025</div>
+                                    </div>
+                                    <div id="cm-paid-card" class="bg-gradient-to-r from-green-50 to-emerald-50 p-4 rounded-lg border border-green-200 min-w-[180px]">
+                                        <div class="text-sm text-gray-600">Total Commission Paid</div>
+                                        <div id="cm-paid-amount" class="text-2xl font-bold text-green-600">₹0.00</div>
+                                        <div id="cm-paid-period" class="text-xs text-gray-500">September 2025</div>
+                                    </div>
+                                    <div id="cm-pending-card" class="bg-gradient-to-r from-orange-50 to-red-50 p-4 rounded-lg border border-orange-200 min-w-[180px]">
+                                        <div class="text-sm text-gray-600">Total Left (Pending)</div>
+                                        <div id="cm-pending-amount" class="text-2xl font-bold text-orange-600">₹0.00</div>
+                                        <div id="cm-pending-period" class="text-xs text-gray-500">September 2025</div>
+                                    </div>
+                                    <div id="cm-patients-card" class="bg-gradient-to-r from-purple-50 to-pink-50 p-4 rounded-lg border border-purple-200 min-w-[180px]">
+                                        <div class="text-sm text-gray-600">Referred Patients</div>
+                                        <div id="cm-patients-count" class="text-2xl font-bold text-purple-600">0/0</div>
+                                        <div id="cm-patients-period" class="text-xs text-gray-500">September 2025</div>
+                                    </div>
                                 </div>
                             </div>
                             <div class="overflow-x-auto">
@@ -1432,17 +1449,50 @@
                             if (doctorMap.has(docId)) doctorMap.get(docId).patientCount = set.size;
                         });
 
-                        // Calculate total commission for the card
+                        // Calculate totals for all cards
                         let totalCommission = 0;
+                        let totalPaid = 0;
+                        let totalPending = 0;
+                        let totalReferredPatients = 0;
+                        let totalPatients = 0;
+
                         doctorMap.forEach(d => {
                             totalCommission += d.earned;
+                            totalPaid += d.paid;
+                            totalPending += Math.max(0, d.earned - d.paid);
+                            totalReferredPatients += d.patientCount;
                         });
 
-                        // Update the total commission card
+                        // Calculate total patients for the month (from bills)
+                        const totalPatientsSet = new Set();
+                        billsSnap.forEach(doc => {
+                            const bill = doc.data();
+                            if (bill.patientId) {
+                                totalPatientsSet.add(bill.patientId);
+                            }
+                        });
+                        totalPatients = totalPatientsSet.size;
+
+                        // Update all cards
                         const totalAmountEl = document.getElementById('cm-total-amount');
                         const totalPeriodEl = document.getElementById('cm-total-period');
                         if (totalAmountEl) totalAmountEl.textContent = `₹${totalCommission.toFixed(2)}`;
                         if (totalPeriodEl) totalPeriodEl.textContent = `${months[month]} ${year}`;
+
+                        const paidAmountEl = document.getElementById('cm-paid-amount');
+                        const paidPeriodEl = document.getElementById('cm-paid-period');
+                        if (paidAmountEl) paidAmountEl.textContent = `₹${totalPaid.toFixed(2)}`;
+                        if (paidPeriodEl) paidPeriodEl.textContent = `${months[month]} ${year}`;
+
+                        const pendingAmountEl = document.getElementById('cm-pending-amount');
+                        const pendingPeriodEl = document.getElementById('cm-pending-period');
+                        if (pendingAmountEl) pendingAmountEl.textContent = `₹${totalPending.toFixed(2)}`;
+                        if (pendingPeriodEl) pendingPeriodEl.textContent = `${months[month]} ${year}`;
+
+                        const patientsCountEl = document.getElementById('cm-patients-count');
+                        const patientsPeriodEl = document.getElementById('cm-patients-period');
+                        if (patientsCountEl) patientsCountEl.textContent = `${totalReferredPatients}/${totalPatients}`;
+                        if (patientsPeriodEl) patientsPeriodEl.textContent = `${months[month]} ${year}`;
 
                         const tbody = document.getElementById('cm-body');
                         tbody.innerHTML = '';
