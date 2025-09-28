@@ -1438,7 +1438,8 @@
                                 <td class="px-6 py-4">${d.locked ? '<span class="px-2 py-1 rounded text-xs font-semibold bg-green-100 text-green-700">paid</span>' : '<span class="px-2 py-1 rounded text-xs font-semibold bg-red-100 text-red-700">unpaid</span>'}</td>
                                 <td class="px-6 py-4 space-x-3">
                                     <button data-id="${d.id}" class="cm-history text-indigo-600 font-semibold hover:underline">History</button>
-                                    ${d.locked ? '<span class="text-gray-400 text-sm">Locked</span>' : `<button data-id="${d.id}" data-earned="${d.earned}" class="cm-markpaid text-blue-600 font-semibold hover:underline">Mark Paid</button>`}
+                                    ${d.locked ? '<span class="text-gray-400 text-sm">Locked</span>' : `<button data-id="${d.id}" data-earned="${d.earned}" data-pending="${pending}" class="cm-pay-amount text-green-600 font-semibold hover:underline">Pay Amount</button>`}
+                                    ${d.locked ? '' : `<button data-id="${d.id}" data-earned="${d.earned}" class="cm-markpaid text-blue-600 font-semibold hover:underline">Mark Paid</button>`}
                                 </td>`;
                             tbody.appendChild(tr);
                         });
@@ -1447,6 +1448,9 @@
                         tbody.querySelectorAll('.cm-markpaid').forEach(btn => {
                             btn.onclick = () => confirmAndMarkPaid(btn.getAttribute('data-id'), parseFloat(btn.getAttribute('data-earned')||'0'));
                         });
+                        tbody.querySelectorAll('.cm-pay-amount').forEach(btn => {
+                            btn.onclick = () => promptPayAmount(btn.getAttribute('data-id'), parseFloat(btn.getAttribute('data-pending')||'0'));
+                        });
                         tbody.querySelectorAll('.cm-history').forEach(btn => {
                             btn.onclick = async () => {
                                 const doctorId = btn.getAttribute('data-id');
@@ -1454,13 +1458,98 @@
                                 const key = `${doctorId}_${y}_${m}`;
                                 const doc = await db.collection('commission_paid_monthly').doc(key).get();
                                 const payments = doc.exists && doc.data().payments ? doc.data().payments : [];
-                                let html = '<div class="space-y-2"><h3 class="font-bold text-lg mb-2">Payment History</h3>';
-                                if (payments.length === 0) html += '<p>No payments yet.</p>';
-                                else html += '<table class="min-w-full text-sm"><thead><tr><th class="px-2 py-1">Date</th><th class="px-2 py-1">Amount</th><th class="px-2 py-1">By</th></tr></thead><tbody>' + payments.map(p => `<tr><td class="px-2 py-1">${new Date(p.date).toLocaleString()}</td><td class="px-2 py-1">₹${p.amount.toFixed(2)}</td><td class="px-2 py-1">${p.by}</td></tr>`).join('') + '</tbody></table>';
-                                html += '</div>';
-                                showModal('Payment History', html, [{ text: 'Close', class: 'bg-gray-500 hover:bg-gray-600', action: hideModal }]);
+                                
+                                // Create proper HTML content
+                                const container = document.createElement('div');
+                                container.className = 'space-y-4';
+                                
+                                const title = document.createElement('h3');
+                                title.className = 'font-bold text-lg mb-4';
+                                title.textContent = 'Payment History';
+                                container.appendChild(title);
+                                
+                                if (payments.length === 0) {
+                                    const noPayments = document.createElement('p');
+                                    noPayments.textContent = 'No payments yet.';
+                                    container.appendChild(noPayments);
+                                } else {
+                                    const table = document.createElement('table');
+                                    table.className = 'min-w-full text-sm border-collapse';
+                                    
+                                    const thead = document.createElement('thead');
+                                    thead.innerHTML = '<tr class="bg-gray-50"><th class="px-3 py-2 text-left border">Date</th><th class="px-3 py-2 text-left border">Amount</th><th class="px-3 py-2 text-left border">By</th></tr>';
+                                    table.appendChild(thead);
+                                    
+                                    const tbody = document.createElement('tbody');
+                                    payments.forEach(p => {
+                                        const row = document.createElement('tr');
+                                        row.innerHTML = `<td class="px-3 py-2 border">${new Date(p.date).toLocaleString()}</td><td class="px-3 py-2 border">₹${p.amount.toFixed(2)}</td><td class="px-3 py-2 border">${p.by}</td>`;
+                                        tbody.appendChild(row);
+                                    });
+                                    table.appendChild(tbody);
+                                    container.appendChild(table);
+                                }
+                                
+                                showModal('Payment History', '', [{ text: 'Close', class: 'bg-gray-500 hover:bg-gray-600', action: hideModal }]);
+                                
+                                // Inject the content into the modal
+                                const msgEl = document.getElementById('generic-modal-message');
+                                if (msgEl) { 
+                                    msgEl.innerHTML = ''; 
+                                    msgEl.appendChild(container); 
+                                }
                             };
                         });
+
+                        function promptPayAmount(doctorId, maxAmount) {
+                            const container = document.createElement('div');
+                            container.innerHTML = `<div class="space-y-3">
+                                <label class="block text-sm">Amount (₹)</label>
+                                <input id="cm-pay-amount" type="number" min="0" max="${maxAmount}" step="0.01" class="w-full p-2 border rounded-md" placeholder="0" />
+                                <p class="text-sm text-gray-600">Maximum: ₹${maxAmount.toFixed(2)}</p>
+                            </div>`;
+                            showModal('Pay Commission Amount', 'Enter amount to pay (cannot exceed pending amount).', [
+                                { text: 'Cancel', class: 'bg-gray-500 hover:bg-gray-600', action: hideModal },
+                                { text: 'Pay', class: 'bg-green-600 hover:bg-green-700', action: async () => {
+                                    const inputEl = container.querySelector('#cm-pay-amount');
+                                    const amt = parseFloat(inputEl && inputEl.value ? inputEl.value : '0');
+                                    if (!(amt > 0)) { showModal('Invalid', 'Amount must be greater than 0'); return; }
+                                    if (amt > maxAmount) { showModal('Invalid', `Amount cannot exceed pending amount (₹${maxAmount.toFixed(2)})`); return; }
+                                    
+                                    // Update monthly aggregate doc
+                                    const y = parseInt(document.getElementById('cm-year').value), m = parseInt(document.getElementById('cm-month').value);
+                                    const key = `${doctorId}_${y}_${m}`;
+                                    const docRef = db.collection('commission_paid_monthly').doc(key);
+                                    await db.runTransaction(async t => {
+                                        const snap = await t.get(docRef);
+                                        const curr = snap.exists ? (snap.data().totalPaid || 0) : 0;
+                                        const payments = snap.exists ? (snap.data().payments || []) : [];
+                                        const user = auth.currentUser ? auth.currentUser.email : 'unknown';
+                                        payments.push({ amount: amt, date: new Date().toISOString(), by: user });
+                                        const newTotal = curr + amt;
+                                        
+                                        // Auto-unlock logic: if pending > 0, unlock automatically
+                                        const doctor = doctorMap.get(doctorId);
+                                        const newPending = Math.max(0, (doctor ? doctor.earned : 0) - newTotal);
+                                        const shouldLock = newPending === 0;
+                                        
+                                        t.set(docRef, { 
+                                            doctorId, 
+                                            year: y, 
+                                            month: m, 
+                                            totalPaid: newTotal, 
+                                            payments, 
+                                            locked: shouldLock,
+                                            lastUpdated: new Date().toISOString()
+                                        }, { merge: true });
+                                    });
+                                    await loadAndRender();
+                                }}
+                            ]);
+                            // Inject inputs into modal message area
+                            const msgEl = document.getElementById('generic-modal-message');
+                            if (msgEl) { msgEl.innerHTML = ''; msgEl.appendChild(container.firstChild); }
+                        }
 
                         function promptAddPaid(doctorId) {
                             const container = document.createElement('div');
