@@ -1443,15 +1443,11 @@
                                 <td class="px-6 py-4 space-x-3">
                                     <button data-id="${d.id}" class="cm-history text-indigo-600 font-semibold hover:underline">History</button>
                                     ${d.locked ? '<span class="text-gray-400 text-sm">Locked</span>' : `<button data-id="${d.id}" data-earned="${d.earned}" data-pending="${pending}" class="cm-pay-amount text-green-600 font-semibold hover:underline">Pay Amount</button>`}
-                                    ${d.locked ? '' : `<button data-id="${d.id}" data-earned="${d.earned}" class="cm-markpaid text-blue-600 font-semibold hover:underline">Mark Paid</button>`}
                                 </td>`;
                             tbody.appendChild(tr);
                         });
 
                         // Actions
-                        tbody.querySelectorAll('.cm-markpaid').forEach(btn => {
-                            btn.onclick = () => confirmAndMarkPaid(btn.getAttribute('data-id'), parseFloat(btn.getAttribute('data-earned')||'0'));
-                        });
                         tbody.querySelectorAll('.cm-pay-amount').forEach(btn => {
                             btn.onclick = () => promptPayAmount(btn.getAttribute('data-id'), parseFloat(btn.getAttribute('data-pending')||'0'));
                         });
