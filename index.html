@@ -60,9 +60,9 @@
 
     <!-- Generic Modal for Alerts and Confirmations -->
     <div id="generic-modal" class="fixed inset-0 modal-bg hidden flex items-center justify-center p-4">
-        <div class="bg-white p-6 rounded-xl shadow-2xl w-full max-w-sm modal-content transform scale-95">
+        <div class="bg-white p-6 rounded-xl shadow-2xl w-full max-w-2xl modal-content transform scale-95">
             <h3 id="generic-modal-title" class="text-xl font-bold text-gray-800 mb-4"></h3>
-            <p id="generic-modal-message" class="mb-6 text-gray-600"></p>
+            <div id="generic-modal-message" class="mb-6 text-gray-600"></div>
             <div id="generic-modal-buttons" class="flex justify-end gap-3">
                 <!-- Buttons are dynamically injected here -->
             </div>
@@ -1338,6 +1338,11 @@
                                     </select>
                                 </div>
                                 <button id="cm-apply" class="px-4 py-2 bg-blue-600 text-white font-semibold rounded-md">Apply</button>
+                                <div id="cm-total-card" class="bg-gradient-to-r from-blue-50 to-indigo-50 p-4 rounded-lg border border-blue-200 min-w-[200px]">
+                                    <div class="text-sm text-gray-600">Total Commission</div>
+                                    <div id="cm-total-amount" class="text-2xl font-bold text-blue-600">₹0.00</div>
+                                    <div id="cm-total-period" class="text-xs text-gray-500">September 2025</div>
+                                </div>
                             </div>
                             <div class="overflow-x-auto">
                                 <table class="min-w-full divide-y divide-gray-200">
@@ -1426,6 +1431,18 @@
                         patientSetMap.forEach((set, docId) => {
                             if (doctorMap.has(docId)) doctorMap.get(docId).patientCount = set.size;
                         });
+
+                        // Calculate total commission for the card
+                        let totalCommission = 0;
+                        doctorMap.forEach(d => {
+                            totalCommission += d.earned;
+                        });
+
+                        // Update the total commission card
+                        const totalAmountEl = document.getElementById('cm-total-amount');
+                        const totalPeriodEl = document.getElementById('cm-total-period');
+                        if (totalAmountEl) totalAmountEl.textContent = `₹${totalCommission.toFixed(2)}`;
+                        if (totalPeriodEl) totalPeriodEl.textContent = `${months[month]} ${year}`;
 
                         const tbody = document.getElementById('cm-body');
                         tbody.innerHTML = '';
