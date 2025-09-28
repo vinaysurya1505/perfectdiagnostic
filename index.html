@@ -1516,9 +1516,16 @@
                             showModal('Pay Commission Amount', 'Enter amount to pay (cannot exceed pending amount).', [
                                 { text: 'Cancel', class: 'bg-gray-500 hover:bg-gray-600', action: hideModal },
                                 { text: 'Pay', class: 'bg-green-600 hover:bg-green-700', action: async () => {
-                                    const inputEl = container.querySelector('#cm-pay-amount');
-                                    const amt = parseFloat(inputEl && inputEl.value ? inputEl.value : '0');
-                                    console.log('Payment attempt:', { amt, maxAmount, isValid: amt > 0 && amt <= maxAmount });
+                                    const inputEl = document.getElementById('cm-pay-amount');
+                                    const inputValue = inputEl ? inputEl.value : '';
+                                    const amt = parseFloat(inputValue) || 0;
+                                    console.log('Payment attempt:', { 
+                                        inputValue, 
+                                        amt, 
+                                        maxAmount, 
+                                        isValid: amt > 0 && amt <= maxAmount,
+                                        inputElement: inputEl
+                                    });
                                     if (isNaN(amt) || amt <= 0) { 
                                         showModal('Invalid Amount', 'Please enter a valid amount greater than ₹0.00'); 
                                         return; 
@@ -1561,7 +1568,19 @@
                             ]);
                             // Inject inputs into modal message area
                             const msgEl = document.getElementById('generic-modal-message');
-                            if (msgEl) { msgEl.innerHTML = ''; msgEl.appendChild(container.firstChild); }
+                            if (msgEl) { 
+                                msgEl.innerHTML = ''; 
+                                msgEl.appendChild(container); 
+                            }
+                            
+                            // Ensure the input is focusable and has proper attributes
+                            setTimeout(() => {
+                                const input = document.getElementById('cm-pay-amount');
+                                if (input) {
+                                    input.focus();
+                                    input.select();
+                                }
+                            }, 100);
                         }
 
                         function promptAddPaid(doctorId) {
