@@ -1509,16 +1509,24 @@
                             const container = document.createElement('div');
                             container.innerHTML = `<div class="space-y-3">
                                 <label class="block text-sm">Amount (₹)</label>
-                                <input id="cm-pay-amount" type="number" min="0" max="${maxAmount}" step="0.01" class="w-full p-2 border rounded-md" placeholder="0" />
-                                <p class="text-sm text-gray-600">Maximum: ₹${maxAmount.toFixed(2)}</p>
+                                <input id="cm-pay-amount" type="number" min="0.01" max="${maxAmount}" step="0.01" class="w-full p-2 border rounded-md" placeholder="0.00" />
+                                <p class="text-sm text-gray-600">Maximum: ₹${maxAmount.toFixed(2)} (Pending Amount)</p>
+                                <p class="text-sm text-blue-600">Enter amount between ₹0.01 and ₹${maxAmount.toFixed(2)}</p>
                             </div>`;
                             showModal('Pay Commission Amount', 'Enter amount to pay (cannot exceed pending amount).', [
                                 { text: 'Cancel', class: 'bg-gray-500 hover:bg-gray-600', action: hideModal },
                                 { text: 'Pay', class: 'bg-green-600 hover:bg-green-700', action: async () => {
                                     const inputEl = container.querySelector('#cm-pay-amount');
                                     const amt = parseFloat(inputEl && inputEl.value ? inputEl.value : '0');
-                                    if (!(amt > 0)) { showModal('Invalid', 'Amount must be greater than 0'); return; }
-                                    if (amt > maxAmount) { showModal('Invalid', `Amount cannot exceed pending amount (₹${maxAmount.toFixed(2)})`); return; }
+                                    console.log('Payment attempt:', { amt, maxAmount, isValid: amt > 0 && amt <= maxAmount });
+                                    if (isNaN(amt) || amt <= 0) { 
+                                        showModal('Invalid Amount', 'Please enter a valid amount greater than ₹0.00'); 
+                                        return; 
+                                    }
+                                    if (amt > maxAmount) { 
+                                        showModal('Amount Too High', `Amount cannot exceed pending amount of ₹${maxAmount.toFixed(2)}`); 
+                                        return; 
+                                    }
                                     
                                     // Update monthly aggregate doc
                                     const y = parseInt(document.getElementById('cm-year').value), m = parseInt(document.getElementById('cm-month').value);
@@ -1548,6 +1556,7 @@
                                         }, { merge: true });
                                     });
                                     await loadAndRender();
+                                    showModal('Success', `Payment of ₹${amt.toFixed(2)} recorded successfully for Dr. ${doctorMap.get(doctorId)?.name || 'Unknown'}`);
                                 }}
                             ]);
                             // Inject inputs into modal message area
