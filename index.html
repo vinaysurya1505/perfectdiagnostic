@@ -1150,16 +1150,18 @@
                             billsSnap.docs.forEach(doc => {
                                 const data = doc.data();
                                 const dateStr = data.createdAt.toDate().toISOString().split('T')[0];
-                                if (!dailyData[dateStr]) dailyData[dateStr] = { patients: new Set(), revenue: 0, expenditure: 0, commission: 0 };
+                                if (!dailyData[dateStr]) dailyData[dateStr] = { patients: new Set(), revenue: 0, expenditure: 0, commission: 0, cash: 0, upi: 0 };
                                 dailyData[dateStr].patients.add(data.patientId);
                                 dailyData[dateStr].revenue += (Number(data.total) || 0);
+                                if (data.paymentMethod === 'cash') dailyData[dateStr].cash += (Number(data.total) || 0);
+                                if (data.paymentMethod === 'upi') dailyData[dateStr].upi += (Number(data.total) || 0);
                             });
 
                             expendituresSnap.docs.forEach(doc => {
                                  const data = doc.data();
                                  const dateStr = data.date?.toDate().toISOString().split('T')[0];
                                  if (dateStr) {
-                                    if (!dailyData[dateStr]) dailyData[dateStr] = { patients: new Set(), revenue: 0, expenditure: 0, commission: 0 };
+                                    if (!dailyData[dateStr]) dailyData[dateStr] = { patients: new Set(), revenue: 0, expenditure: 0, commission: 0, cash: 0, upi: 0 };
                                     dailyData[dateStr].expenditure += (Number(data.amount) || 0);
                                  }
                             });
@@ -1168,7 +1170,7 @@
                                 const data = doc.data();
                                 const dateStr = data.date?.toDate().toISOString().split('T')[0];
                                 if(dateStr) {
-                                    if (!dailyData[dateStr]) dailyData[dateStr] = { patients: new Set(), revenue: 0, expenditure: 0, commission: 0 };
+                                    if (!dailyData[dateStr]) dailyData[dateStr] = { patients: new Set(), revenue: 0, expenditure: 0, commission: 0, cash: 0, upi: 0 };
                                     dailyData[dateStr].commission += (Number(data.amount) || 0);
                                 }
                             });
@@ -1192,6 +1194,8 @@
                                 <th class="px-6 py-3">Revenue</th>
                                 <th class="px-6 py-3">Expenditure</th>
                                 <th class="px-6 py-3">Commission</th>
+                                <th class="px-6 py-3">Cash</th>
+                                <th class="px-6 py-3">UPI</th>
                                 <th class="px-6 py-3">Net Profit</th>
                             </tr></thead><tbody class="bg-white divide-y divide-gray-200">`;
 
@@ -1204,11 +1208,13 @@
                                 totalExpenditure += data.expenditure;
                                 totalCommission += data.commission;
                                 tableHTML += `<tr>
-                                    <td class="px-6 py-4">${new Date(dateStr).toLocaleDateString()}</td>
+                                    <td class="px-6 py-4">${dateStr}</td>
                                     <td class="px-6 py-4">${data.patients.size}</td>
                                     <td class="px-6 py-4 text-green-600 font-semibold">₹${data.revenue.toFixed(2)}</td>
                                     <td class="px-6 py-4 text-red-600 font-semibold">₹${data.expenditure.toFixed(2)}</td>
                                     <td class="px-6 py-4 text-orange-500 font-semibold">₹${data.commission.toFixed(2)}</td>
+                                    <td class="px-6 py-4 text-blue-600 font-semibold">₹${data.cash.toFixed(2)}</td>
+                                    <td class="px-6 py-4 text-blue-600 font-semibold">₹${data.upi.toFixed(2)}</td>
                                     <td class="px-6 py-4 font-bold ${netProfit >= 0 ? 'text-blue-600' : 'text-red-700'}">₹${netProfit.toFixed(2)}</td>
                                 </tr>`;
                             });
@@ -1219,6 +1225,8 @@
                                 <td class="px-6 py-4">₹${totalRevenue.toFixed(2)}</td>
                                 <td class="px-6 py-4">₹${totalExpenditure.toFixed(2)}</td>
                                 <td class="px-6 py-4">₹${totalCommission.toFixed(2)}</td>
+                                <td class="px-6 py-4">₹${(totalRevenue - totalExpenditure - totalCommission).toFixed(2)}</td>
+                                <td class="px-6 py-4">₹${(totalRevenue - totalExpenditure - totalCommission).toFixed(2)}</td>
                                 <td class="px-6 py-4">₹${(totalRevenue - totalExpenditure - totalCommission).toFixed(2)}</td>
                             </tr>`;
 
@@ -1247,6 +1255,8 @@
                                             <th style="text-align:right; padding:8px; border:1px solid #e5e7eb;">Revenue</th>
                                             <th style="text-align:right; padding:8px; border:1px solid #e5e7eb;">Expenditure</th>
                                             <th style="text-align:right; padding:8px; border:1px solid #e5e7eb;">Commission</th>
+                                            <th style="text-align:right; padding:8px; border:1px solid #e5e7eb;">Cash</th>
+                                            <th style="text-align:right; padding:8px; border:1px solid #e5e7eb;">UPI</th>
                                             <th style="text-align:right; padding:8px; border:1px solid #e5e7eb;">Net Profit</th>
                                         </tr>
                                     </thead>
@@ -1255,11 +1265,13 @@
                                         const data = dailyData[dateStr];
                                         const netProfit = data.revenue - data.expenditure - data.commission;
                                         return `<tr>
-                                            <td style=\"padding:8px; border:1px solid #e5e7eb;\">${new Date(dateStr).toLocaleDateString()}</td>
+                                            <td style=\"padding:8px; border:1px solid #e5e7eb;\">${dateStr}</td>
                                             <td style=\"padding:8px; text-align:right; border:1px solid #e5e7eb;\">${data.patients.size}</td>
                                             <td style=\"padding:8px; text-align:right; border:1px solid #e5e7eb; color:#059669; font-weight:600;\">₹${data.revenue.toFixed(2)}</td>
                                             <td style=\"padding:8px; text-align:right; border:1px solid #e5e7eb; color:#dc2626; font-weight:600;\">₹${data.expenditure.toFixed(2)}</td>
                                             <td style=\"padding:8px; text-align:right; border:1px solid #e5e7eb; color:#ea580c; font-weight:600;\">₹${data.commission.toFixed(2)}</td>
+                                            <td style=\"padding:8px; text-align:right; border:1px solid #e5e7eb; color:#2563eb; font-weight:600;\">₹${data.cash.toFixed(2)}</td>
+                                            <td style=\"padding:8px; text-align:right; border:1px solid #e5e7eb; color:#2563eb; font-weight:600;\">₹${data.upi.toFixed(2)}</td>
                                             <td style=\"padding:8px; text-align:right; border:1px solid #e5e7eb; font-weight:700; color:${netProfit >= 0 ? '#2563eb' : '#b91c1c'};\">₹${netProfit.toFixed(2)}</td>
                                         </tr>`;
                                     }).join('')}
@@ -1269,6 +1281,8 @@
                                         <td style=\"padding:8px; text-align:right; border:1px solid #e5e7eb;\">₹${totalRevenue.toFixed(2)}</td>
                                         <td style=\"padding:8px; text-align:right; border:1px solid #e5e7eb;\">₹${totalExpenditure.toFixed(2)}</td>
                                         <td style=\"padding:8px; text-align:right; border:1px solid #e5e7eb;\">₹${totalCommission.toFixed(2)}</td>
+                                        <td style=\"padding:8px; text-align:right; border:1px solid #e5e7eb;\">₹${(totalRevenue - totalExpenditure - totalCommission).toFixed(2)}</td>
+                                        <td style=\"padding:8px; text-align:right; border:1px solid #e5e7eb;\">₹${(totalRevenue - totalExpenditure - totalCommission).toFixed(2)}</td>
                                         <td style=\"padding:8px; text-align:right; border:1px solid #e5e7eb;\">₹${(totalRevenue - totalExpenditure - totalCommission).toFixed(2)}</td>
                                     </tr>`;
 
