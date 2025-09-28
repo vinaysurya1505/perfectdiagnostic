@@ -1447,6 +1447,20 @@
                         tbody.querySelectorAll('.cm-markpaid').forEach(btn => {
                             btn.onclick = () => confirmAndMarkPaid(btn.getAttribute('data-id'), parseFloat(btn.getAttribute('data-earned')||'0'));
                         });
+                        tbody.querySelectorAll('.cm-history').forEach(btn => {
+                            btn.onclick = async () => {
+                                const doctorId = btn.getAttribute('data-id');
+                                const y = parseInt(document.getElementById('cm-year').value), m = parseInt(document.getElementById('cm-month').value);
+                                const key = `${doctorId}_${y}_${m}`;
+                                const doc = await db.collection('commission_paid_monthly').doc(key).get();
+                                const payments = doc.exists && doc.data().payments ? doc.data().payments : [];
+                                let html = '<div class="space-y-2"><h3 class="font-bold text-lg mb-2">Payment History</h3>';
+                                if (payments.length === 0) html += '<p>No payments yet.</p>';
+                                else html += '<table class="min-w-full text-sm"><thead><tr><th class="px-2 py-1">Date</th><th class="px-2 py-1">Amount</th><th class="px-2 py-1">By</th></tr></thead><tbody>' + payments.map(p => `<tr><td class="px-2 py-1">${new Date(p.date).toLocaleString()}</td><td class="px-2 py-1">₹${p.amount.toFixed(2)}</td><td class="px-2 py-1">${p.by}</td></tr>`).join('') + '</tbody></table>';
+                                html += '</div>';
+                                showModal('Payment History', html, [{ text: 'Close', class: 'bg-gray-500 hover:bg-gray-600', action: hideModal }]);
+                            };
+                        });
 
                         function promptAddPaid(doctorId) {
                             const container = document.createElement('div');
