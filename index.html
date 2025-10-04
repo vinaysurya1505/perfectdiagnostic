@@ -730,8 +730,57 @@
                                 if (doctor && doctor.commissionPercent > 0) {
                                     // Calculate commission from subtotal (before discount/GST)
                                     const commissionAmount = subtotal * (doctor.commissionPercent / 100);
-                                    await db.collection('doctors').doc(referredById).update({ commissionBalance: FieldValue.increment(commissionAmount) });
-                                    await db.collection('transactions').add({ type: 'commission', amount: commissionAmount, description: `Commission for Bill #${newBillNumber} to Dr. ${doctor.name}`, relatedBillId: billRef.id, relatedDoctorId: referredById, date: Timestamp.now() });
+                                    
+                                    // If there's a discount, deduct it from doctor's commission
+                                    let finalCommissionAmount = commissionAmount;
+                                    if (discountAmount > 0) {
+                                        finalCommissionAmount = Math.max(0, commissionAmount - discountAmount);
+                                        
+                                        // Record discount deduction from doctor commission
+                                        if (discountAmount > commissionAmount) {
+                                            // If discount is more than commission, doctor gets 0 commission
+                                            await db.collection('transactions').add({ 
+                                                type: 'commission_discount', 
+                                                amount: -commissionAmount, 
+                                                description: `Discount of ₹${discountAmount.toFixed(2)} deducted from Dr. ${doctor.name}'s commission (₹${commissionAmount.toFixed(2)}) for Bill #${newBillNumber}`, 
+                                                relatedBillId: billRef.id, 
+                                                relatedDoctorId: referredById, 
+                                                date: Timestamp.now() 
+                                            });
+                                        } else {
+                                            // Partial deduction from commission
+                                            await db.collection('transactions').add({ 
+                                                type: 'commission_discount', 
+                                                amount: -discountAmount, 
+                                                description: `Discount of ₹${discountAmount.toFixed(2)} deducted from Dr. ${doctor.name}'s commission for Bill #${newBillNumber}`, 
+                                                relatedBillId: billRef.id, 
+                                                relatedDoctorId: referredById, 
+                                                date: Timestamp.now() 
+                                            });
+                                        }
+                                    }
+                                    
+                                    // Update doctor's commission balance with final amount
+                                    await db.collection('doctors').doc(referredById).update({ commissionBalance: FieldValue.increment(finalCommissionAmount) });
+                                    await db.collection('transactions').add({ 
+                                        type: 'commission', 
+                                        amount: finalCommissionAmount, 
+                                        description: `Commission for Bill #${newBillNumber} to Dr. ${doctor.name} (after discount deduction)`, 
+                                        relatedBillId: billRef.id, 
+                                        relatedDoctorId: referredById, 
+                                        date: Timestamp.now() 
+                                    });
+                                }
+                            } else {
+                                // Self-referred: Record discount as owner's loss
+                                if (discountAmount > 0) {
+                                    await db.collection('transactions').add({ 
+                                        type: 'owner_discount', 
+                                        amount: -discountAmount, 
+                                        description: `Self-referred discount of ₹${discountAmount.toFixed(2)} for Bill #${newBillNumber}`, 
+                                        relatedBillId: billRef.id, 
+                                        date: Timestamp.now() 
+                                    });
                                 }
                             }
                             
@@ -856,6 +905,10 @@
                             const t = doc.data();
                             if (t.type === 'income') dailyIncomeTotal += t.amount;
                             if (t.type === 'commission') dailyCommission += t.amount;
+                            if (t.type === 'commission_discount' || t.type === 'owner_discount') {
+                                // Discounts are negative amounts, so we add absolute value to expenditure
+                                dailyExpenditureTotal += Math.abs(t.amount);
+                            }
                         });
 
                         expendituresSnap.forEach(doc => {
@@ -885,6 +938,9 @@
                         ]);
 
                         const incomeDocs = allTransactionsSnap.docs.filter(doc => doc.data().type === 'income');
+                        const discountDocs = allTransactionsSnap.docs.filter(doc => 
+                            doc.data().type === 'commission_discount' || doc.data().type === 'owner_discount'
+                        );
 
                         const mapDateToValue = (docs) => {
                             const dateMap = {};
@@ -895,12 +951,29 @@
                             return dateMap;
                         };
 
+                        const mapDiscountDateToValue = (docs) => {
+                            const dateMap = {};
+                            docs.forEach(doc => {
+                                const date = doc.data().date.toDate().toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+                                // Discounts are negative amounts, so we add absolute value
+                                dateMap[date] = (dateMap[date] || 0) + Math.abs(doc.data().amount);
+                            });
+                            return dateMap;
+                        };
+
                         const dailyIncomeMap = mapDateToValue(incomeDocs);
                         const dailyExpenditureMap = mapDateToValue(expenditureTxs.docs);
+                        const dailyDiscountMap = mapDiscountDateToValue(discountDocs);
+
+                        // Combine regular expenditures with discount expenditures
+                        const combinedExpenditureMap = { ...dailyExpenditureMap };
+                        Object.keys(dailyDiscountMap).forEach(date => {
+                            combinedExpenditureMap[date] = (combinedExpenditureMap[date] || 0) + dailyDiscountMap[date];
+                        });
 
                         labels.forEach((label, index) => {
                             if (dailyIncomeMap[label]) incomeData[index] = dailyIncomeMap[label];
-                            if (dailyExpenditureMap[label]) expenditureData[index] = dailyExpenditureMap[label];
+                            if (combinedExpenditureMap[label]) expenditureData[index] = combinedExpenditureMap[label];
                         });
 
                         // Render daily data on the dashboard
@@ -1150,15 +1223,17 @@
                             billsSnap.docs.forEach(doc => {
                                 const data = doc.data();
                                 const dateStr = data.createdAt.toDate().toISOString().split('T')[0];
-                                if (!dailyData[dateStr]) dailyData[dateStr] = { patients: new Set(), revenue: 0, refund: 0, expenditure: 0, commission: 0, cash: 0, upi: 0 };
+                                if (!dailyData[dateStr]) dailyData[dateStr] = { patients: new Set(), revenue: 0, refund: 0, expenditure: 0, commission: 0, cash: 0, upi: 0, discount: 0 };
                                 dailyData[dateStr].patients.add(data.patientId);
                                 
                                 if (data.status === 'refunded') {
                                     // For refunded bills, add to refund amount
                                     dailyData[dateStr].refund += (Number(data.total) || 0);
                                 } else {
-                                    // For normal bills, add to revenue
+                                    // For normal bills, add net revenue (after discount)
                                     dailyData[dateStr].revenue += (Number(data.total) || 0);
+                                    // Track discount separately
+                                    dailyData[dateStr].discount += (Number(data.discountAmount) || 0);
                                     if (data.paymentMethod === 'cash') dailyData[dateStr].cash += (Number(data.total) || 0);
                                     if (data.paymentMethod === 'upi') dailyData[dateStr].upi += (Number(data.total) || 0);
                                 }
@@ -1182,6 +1257,8 @@
                                 }
                             });
 
+                            // Note: Discounts are now tracked separately in the discount column, not in expenditure
+
                             const sortedDates = Object.keys(dailyData).sort();
                             if(sortedDates.length === 0) {
                                 reportOutput.innerHTML = `<div id="report-container" class="overflow-x-auto"><p class="text-center text-gray-500 py-8">No data found for the selected date range.</p></div>`;
@@ -1199,6 +1276,7 @@
                                 <th class="px-6 py-3">Date</th>
                                 <th class="px-6 py-3">Patients</th>
                                 <th class="px-6 py-3">Revenue</th>
+                                <th class="px-6 py-3">Discount</th>
                                 <th class="px-6 py-3">Bill Refund</th>
                                 <th class="px-6 py-3">Expenditure</th>
                                 <th class="px-6 py-3">Commission</th>
@@ -1207,12 +1285,13 @@
                                 <th class="px-6 py-3">Net Profit</th>
                             </tr></thead><tbody class="bg-white divide-y divide-gray-200">`;
 
-                            let totalPatientsCount = 0, totalRevenue = 0, totalRefund = 0, totalExpenditure = 0, totalCommission = 0, totalCash = 0, totalUpi = 0;
+                            let totalPatientsCount = 0, totalRevenue = 0, totalDiscount = 0, totalRefund = 0, totalExpenditure = 0, totalCommission = 0, totalCash = 0, totalUpi = 0;
                             sortedDates.forEach(dateStr => {
                                 const data = dailyData[dateStr];
                                 const netProfit = data.revenue - data.refund - data.expenditure - data.commission;
                                 totalPatientsCount += data.patients.size;
                                 totalRevenue += data.revenue;
+                                totalDiscount += data.discount;
                                 totalRefund += data.refund;
                                 totalExpenditure += data.expenditure;
                                 totalCommission += data.commission;
@@ -1222,6 +1301,7 @@
                                     <td class="px-6 py-4">${dateStr}</td>
                                     <td class="px-6 py-4">${data.patients.size}</td>
                                     <td class="px-6 py-4 text-green-600 font-semibold">₹${data.revenue.toFixed(2)}</td>
+                                    <td class="px-6 py-4 text-orange-500 font-semibold">₹${data.discount.toFixed(2)}</td>
                                     <td class="px-6 py-4 text-red-500 font-semibold">₹${data.refund.toFixed(2)}</td>
                                     <td class="px-6 py-4 text-red-600 font-semibold">₹${data.expenditure.toFixed(2)}</td>
                                     <td class="px-6 py-4 text-orange-500 font-semibold">₹${data.commission.toFixed(2)}</td>
@@ -1235,6 +1315,7 @@
                                 <td class="px-6 py-4">Total</td>
                                 <td class="px-6 py-4">${totalPatientsCount}</td>
                                 <td class="px-6 py-4">₹${totalRevenue.toFixed(2)}</td>
+                                <td class="px-6 py-4">₹${totalDiscount.toFixed(2)}</td>
                                 <td class="px-6 py-4">₹${totalRefund.toFixed(2)}</td>
                                 <td class="px-6 py-4">₹${totalExpenditure.toFixed(2)}</td>
                                 <td class="px-6 py-4">₹${totalCommission.toFixed(2)}</td>
@@ -1267,6 +1348,7 @@
                                             <th style="text-align:left; padding:8px; border:1px solid #e5e7eb;">Date</th>
                                             <th style="text-align:right; padding:8px; border:1px solid #e5e7eb;">Patients</th>
                                             <th style="text-align:right; padding:8px; border:1px solid #e5e7eb;">Revenue</th>
+                                            <th style="text-align:right; padding:8px; border:1px solid #e5e7eb;">Discount</th>
                                             <th style="text-align:right; padding:8px; border:1px solid #e5e7eb;">Bill Refund</th>
                                             <th style="text-align:right; padding:8px; border:1px solid #e5e7eb;">Expenditure</th>
                                             <th style="text-align:right; padding:8px; border:1px solid #e5e7eb;">Commission</th>
@@ -1283,6 +1365,7 @@
                                             <td style=\"padding:8px; border:1px solid #e5e7eb;\">${dateStr}</td>
                                             <td style=\"padding:8px; text-align:right; border:1px solid #e5e7eb;\">${data.patients.size}</td>
                                             <td style=\"padding:8px; text-align:right; border:1px solid #e5e7eb; color:#059669; font-weight:600;\">₹${data.revenue.toFixed(2)}</td>
+                                            <td style=\"padding:8px; text-align:right; border:1px solid #e5e7eb; color:#ea580c; font-weight:600;\">₹${data.discount.toFixed(2)}</td>
                                             <td style=\"padding:8px; text-align:right; border:1px solid #e5e7eb; color:#dc2626; font-weight:600;\">₹${data.refund.toFixed(2)}</td>
                                             <td style=\"padding:8px; text-align:right; border:1px solid #e5e7eb; color:#dc2626; font-weight:600;\">₹${data.expenditure.toFixed(2)}</td>
                                             <td style=\"padding:8px; text-align:right; border:1px solid #e5e7eb; color:#ea580c; font-weight:600;\">₹${data.commission.toFixed(2)}</td>
@@ -1295,6 +1378,7 @@
                                         <td style=\"padding:8px; border:1px solid #e5e7eb;\">Total</td>
                                         <td style=\"padding:8px; text-align:right; border:1px solid #e5e7eb;\">${totalPatientsCount}</td>
                                         <td style=\"padding:8px; text-align:right; border:1px solid #e5e7eb;\">₹${totalRevenue.toFixed(2)}</td>
+                                        <td style=\"padding:8px; text-align:right; border:1px solid #e5e7eb;\">₹${totalDiscount.toFixed(2)}</td>
                                         <td style=\"padding:8px; text-align:right; border:1px solid #e5e7eb;\">₹${totalRefund.toFixed(2)}</td>
                                         <td style=\"padding:8px; text-align:right; border:1px solid #e5e7eb;\">₹${totalExpenditure.toFixed(2)}</td>
                                         <td style=\"padding:8px; text-align:right; border:1px solid #e5e7eb;\">₹${totalCommission.toFixed(2)}</td>
