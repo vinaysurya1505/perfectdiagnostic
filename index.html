@@ -1511,10 +1511,15 @@
                             if (!b.referredById) return;
                             const dm = doctorMap.get(b.referredById);
                             if (!dm) return;
-                            // Calculate commission from subtotal (before discount/GST) as per business logic
-                            const commissionAmount = Number(b.subtotal || 0) * (dm.percent / 100);
-                            dm.earned += commissionAmount;
-                            console.log(`Commission for Dr. ${dm.name}: Bill subtotal=${b.subtotal}, Commission %=${dm.percent}, Amount=${commissionAmount}`);
+                            
+                            // Calculate commission from subtotal (before discount/GST)
+                            const originalCommission = Number(b.subtotal || 0) * (dm.percent / 100);
+                            // Apply discount deduction from commission
+                            const discountAmount = Number(b.discountAmount || 0);
+                            const finalCommission = Math.max(0, originalCommission - discountAmount);
+                            
+                            dm.earned += finalCommission;
+                            console.log(`Commission for Dr. ${dm.name}: Bill subtotal=${b.subtotal}, Original Commission=${originalCommission}, Discount=${discountAmount}, Final Commission=${finalCommission}`);
                         });
 
                         // Commission paid: prefer admin-entered monthly totals (exact values)
