@@ -574,7 +574,17 @@
                     content.innerHTML = `
                         <div class="space-y-6">
                             <div class="flex justify-between items-center">
-                                <h2 class="text-xl font-bold text-gray-800">Recent Bills</h2>
+                                <div class="flex items-center gap-4">
+                                    <h2 class="text-xl font-bold text-gray-800">Recent Bills</h2>
+                                    <div class="relative">
+                                        <input type="text" id="patient-search" placeholder="Search by patient name..." class="pl-10 pr-4 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500">
+                                        <div class="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                                            <svg class="h-5 w-5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path>
+                                            </svg>
+                                        </div>
+                                    </div>
+                                </div>
                                 <button id="add-bill-btn" class="px-4 py-2 bg-blue-600 text-white font-semibold rounded-md hover:bg-blue-700 shadow">Create New Bill</button>
                             </div>
                             <div class="bg-white shadow-lg rounded-xl overflow-hidden">
@@ -582,7 +592,7 @@
                                     <table class="min-w-full divide-y divide-gray-200">
                                         <thead class="bg-gray-50">
                                             <tr>
-                                                <th class="px-6 py-3 text-left">Bill #</th><th class="px-6 py-3 text-left">Patient</th><th class="px-6 py-3 text-left">Date</th><th class="px-6 py-3 text-left">Total</th><th class="px-6 py-3 text-left">Status</th><th class="px-6 py-3 text-left">Actions</th>
+                                                <th class="px-6 py-3 text-left">Bill #</th><th class="px-6 py-3 text-left">Patient</th><th class="px-6 py-3 text-left">Date</th><th class="px-6 py-3 text-left">Total</th><th class="px-6 py-3 text-left">Status</th><th class="px-6 py-3 text-left">Left Amount</th><th class="px-6 py-3 text-left">Actions</th>
                                             </tr>
                                         </thead>
                                         <tbody id="bills-list-body" class="bg-white divide-y divide-gray-200"></tbody>
@@ -814,16 +824,21 @@
                         }
                     });
 
-                    const unsubscribe = db.collection('bills').orderBy('createdAt', 'desc').limit(20).onSnapshot(snapshot => {
+                    let allBills = [];
+                    let filteredBills = [];
+
+                    function renderBills(bills) {
                         billsListBody.innerHTML = '';
-                        if (snapshot.empty) {
-                            billsListBody.innerHTML = `<tr><td colspan="5" class="text-center py-10 text-gray-500">No bills found. Create one to get started!</td></tr>`; return;
+                        if (bills.length === 0) {
+                            billsListBody.innerHTML = `<tr><td colspan="7" class="text-center py-10 text-gray-500">No bills found. Create one to get started!</td></tr>`; 
+                            return;
                         }
-                        snapshot.forEach(doc => {
-                            const bill = doc.data();
+                        bills.forEach(bill => {
                             const patientName = bill.patientDetails?.name || 'Unknown';
                             const row = billsListBody.insertRow();
                             const status = bill.status === 'refunded' ? 'refunded' : 'paid';
+                            const leftAmount = bill.leftAmount || 0;
+                            
                             row.innerHTML = `
                                 <td class="px-6 py-4 font-medium text-gray-900">${bill.billNumber}</td>
                                 <td class="px-6 py-4 text-gray-700">${patientName}</td>
@@ -832,14 +847,92 @@
                                 <td class="px-6 py-4">
                                     <span class="inline-block px-2 py-1 rounded text-xs font-semibold ${status === 'refunded' ? 'bg-red-100 text-red-700' : 'bg-green-100 text-green-700'}">${status}</span>
                                 </td>
+                                <td class="px-6 py-4">
+                                    ${leftAmount > 0 ? `
+                                        <div class="text-center">
+                                            <div class="text-sm font-semibold text-orange-600 mb-1">₹${leftAmount.toFixed(2)}</div>
+                                            <button data-id="${bill.id}" class="mark-paid-btn px-2 py-1 bg-orange-500 text-white text-xs rounded hover:bg-orange-600">Mark Paid</button>
+                                        </div>
+                                    ` : `
+                                        <div class="flex items-center gap-2">
+                                            <input type="number" id="left-amount-${bill.id}" value="0" min="0" step="0.01" placeholder="0" class="w-20 px-2 py-1 border rounded text-sm">
+                                            <button data-id="${bill.id}" class="add-left-amount-btn px-2 py-1 bg-green-500 text-white text-xs rounded hover:bg-green-600">Add</button>
+                                        </div>
+                                    `}
+                                </td>
                                 <td class="px-6 py-4 flex gap-3">
-                                    <button data-id="${doc.id}" class="view-pdf-btn text-blue-600 hover:underline font-semibold">View/PDF</button>
-                                    ${status !== 'refunded' ? `<button data-id="${doc.id}" class="refund-bill-btn text-red-600 hover:underline font-semibold">Refund</button>` : ''}
+                                    <button data-id="${bill.id}" class="view-pdf-btn text-blue-600 hover:underline font-semibold">View/PDF</button>
+                                    ${status !== 'refunded' ? `<button data-id="${bill.id}" class="refund-bill-btn text-red-600 hover:underline font-semibold">Refund</button>` : ''}
                                 </td>
                             `;
                         });
+                    }
+
+                    const unsubscribe = db.collection('bills').orderBy('createdAt', 'desc').limit(20).onSnapshot(snapshot => {
+                        allBills = [];
+                        snapshot.forEach(doc => {
+                            allBills.push({ id: doc.id, ...doc.data() });
+                        });
+                        filteredBills = allBills;
+                        renderBills(filteredBills);
                     });
                     state.listeners.push(unsubscribe);
+
+                    // Search functionality
+                    document.getElementById('patient-search').addEventListener('input', (e) => {
+                        const searchTerm = e.target.value.toLowerCase();
+                        filteredBills = allBills.filter(bill => {
+                            const patientName = (bill.patientDetails?.name || 'Unknown').toLowerCase();
+                            return patientName.includes(searchTerm);
+                        });
+                        renderBills(filteredBills);
+                    });
+
+                    // Event delegation for Left Amount buttons
+                    billsListBody.addEventListener('click', (e) => {
+                        if (e.target.classList.contains('add-left-amount-btn')) {
+                            const billId = e.target.dataset.id;
+                            const input = document.getElementById(`left-amount-${billId}`);
+                            const amount = parseFloat(input.value) || 0;
+                            
+                            if (amount > 0) {
+                                addLeftAmount(billId, amount);
+                            } else {
+                                showModal('Invalid Amount', 'Please enter a valid amount greater than 0.');
+                            }
+                        }
+                        
+                        if (e.target.classList.contains('mark-paid-btn')) {
+                            const billId = e.target.dataset.id;
+                            markLeftAmountAsPaid(billId);
+                        }
+                    });
+
+                    async function addLeftAmount(billId, amount) {
+                        try {
+                            await db.collection('bills').doc(billId).update({
+                                leftAmount: amount,
+                                lastUpdated: Timestamp.now()
+                            });
+                            showModal('Success', `Left amount of ₹${amount.toFixed(2)} added successfully!`);
+                        } catch (error) {
+                            console.error('Error adding left amount:', error);
+                            showModal('Error', 'Failed to add left amount. Please try again.');
+                        }
+                    }
+
+                    async function markLeftAmountAsPaid(billId) {
+                        try {
+                            await db.collection('bills').doc(billId).update({
+                                leftAmount: 0,
+                                lastUpdated: Timestamp.now()
+                            });
+                            showModal('Success', 'Left amount marked as paid successfully!');
+                        } catch (error) {
+                            console.error('Error marking as paid:', error);
+                            showModal('Error', 'Failed to mark as paid. Please try again.');
+                        }
+                    }
                 }
 
                 async function handleRefundBill(billId) {
